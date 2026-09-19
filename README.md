@@ -4,6 +4,10 @@ An Android proof-of-concept for a stationary Pixel and Even Realities G2 glasses
 
 No marker, printed target, or external tracking aid is used.
 
+The `dev` branch currently exercises this tracking system as a calibrated piano
+note waterfall for **Hot Cross Buns**. See [PIANO_TESTING.md](PIANO_TESTING.md)
+for the physical setup, phone controls, and simulated-distance model.
+
 ## Repository layout
 
 ```text

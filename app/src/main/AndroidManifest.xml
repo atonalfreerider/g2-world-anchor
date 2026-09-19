@@ -46,7 +46,7 @@
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
-        android:label="G2 World Anchor"
+        android:label="G2 Piano Waterfall"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 

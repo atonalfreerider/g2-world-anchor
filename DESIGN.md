@@ -4,6 +4,11 @@
 
 Demonstrate a world-stable monocular cube on G2 using only the stationary Pixel’s front camera and on-device face/head-pose estimation. The wearer should need no printed marker or external tracking hardware.
 
+On the `dev` branch, the cube is replaced by a three-lane piano runway fixed to
+a user-calibrated strike point. The 16-beat Hot Cross Buns sequence advances on
+a 60 Hz monotonic animation clock; phone preview rendering is independent of
+face-inference cadence, while the G2 path retains only the newest text frame.
+
 ## Core decisions
 
 | Area | Decision | Reason |

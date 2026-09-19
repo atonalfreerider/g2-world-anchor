@@ -91,6 +91,72 @@ object TextWorldRenderer {
         }
     }
 
+    /** Projects the piano runway and animated melody into the low-bandwidth G2 text surface. */
+    fun renderPiano(
+        eye: Pose3,
+        piano: PianoCalibration,
+        elapsedSeconds: Double,
+        tempoBpm: Int,
+    ): String {
+        val cells = CharArray(COLUMNS * ROWS) { ' ' }
+        val priority = IntArray(cells.size)
+        val halfSpan = piano.laneSpacingMeters * 1.65
+
+        // Perspective rails make the physical keyboard plane readable even
+        // between notes. The inner rails separate G, A, and B.
+        for (x in listOf(-halfSpan, -piano.laneSpacingMeters / 2.0, piano.laneSpacingMeters / 2.0, halfSpan)) {
+            val near = project(eye.inverseTransform(piano.strikeCenterWorld + Vec3(x, 0.0, 0.0)))
+            val far = project(
+                eye.inverseTransform(piano.strikeCenterWorld + Vec3(x, 0.0, -piano.runwayLengthMeters)),
+            )
+            if (near != null && far != null) drawLine(cells, priority, near, far, '|', 1)
+        }
+
+        val frame = HotCrossBuns.frame(elapsedSeconds, tempoBpm, piano.runwayLengthMeters)
+        for (distance in frame.beatMarkersMeters) {
+            val left = project(
+                eye.inverseTransform(piano.strikeCenterWorld + Vec3(-halfSpan, 0.0, -distance)),
+            )
+            val right = project(
+                eye.inverseTransform(piano.strikeCenterWorld + Vec3(halfSpan, 0.0, -distance)),
+            )
+            if (left != null && right != null) drawLine(cells, priority, left, right, '.', 1)
+        }
+
+        val halfWidth = piano.laneSpacingMeters * 0.38
+        for (block in frame.blocks.asReversed()) {
+            val x = block.lane * piano.laneSpacingMeters
+            val points = listOf(
+                Vec3(x - halfWidth, 0.0, -block.nearMeters),
+                Vec3(x + halfWidth, 0.0, -block.nearMeters),
+                Vec3(x + halfWidth, 0.0, -block.farMeters),
+                Vec3(x - halfWidth, 0.0, -block.farMeters),
+            ).map { project(eye.inverseTransform(piano.strikeCenterWorld + it)) }
+            if (points.any { it == null }) continue
+            val p = points.filterNotNull()
+            val glyph = if (block.active) '#' else '*'
+            for (i in p.indices) drawLine(cells, priority, p[i], p[(i + 1) % p.size], glyph, 3)
+            val center = project(
+                eye.inverseTransform(
+                    HotCrossBuns.laneCenter(piano, block.lane, (block.nearMeters + block.farMeters) / 2.0),
+                ),
+            )
+            if (center != null) {
+                plot(cells, priority, center.x.roundToInt(), center.y.roundToInt(), block.label, 4)
+            }
+        }
+
+        val strikeLeft = project(eye.inverseTransform(piano.strikeCenterWorld + Vec3(-halfSpan, 0.0, 0.0)))
+        val strikeRight = project(eye.inverseTransform(piano.strikeCenterWorld + Vec3(halfSpan, 0.0, 0.0)))
+        if (strikeLeft != null && strikeRight != null) {
+            drawLine(cells, priority, strikeLeft, strikeRight, '=', 5)
+        }
+
+        return (0 until ROWS).joinToString("\n") { row ->
+            String(cells, row * COLUMNS, COLUMNS)
+        }
+    }
+
     private fun project(point: Vec3): GridPoint? {
         if (point.z <= 0.04) return null
         val px = DISPLAY_WIDTH / 2.0 + focalPx * point.x / point.z

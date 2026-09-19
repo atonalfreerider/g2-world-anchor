@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -103,7 +104,14 @@ class MainActivity : ComponentActivity() {
                         experiment = anchorController.state.collectAsState().value,
                         onConnect = { ensurePermissionsThen(::startBridgeAndConnect) },
                         onDisconnect = { service?.disconnectGlasses() },
-                        onRecenter = anchorController::recenter,
+                        onSetStrikeLine = anchorController::setStrikeLine,
+                        onAimDistance = anchorController::adjustAimDistance,
+                        onNudge = anchorController::nudgePiano,
+                        onLaneSpacing = anchorController::adjustLaneSpacing,
+                        onRunwayLength = anchorController::adjustRunwayLength,
+                        onTempo = anchorController::adjustTempo,
+                        onPlaying = anchorController::setPlaying,
+                        onRestart = anchorController::restartSong,
                         onStreaming = anchorController::setStreaming,
                     )
                 }
@@ -197,15 +205,22 @@ private fun ExperimentScreen(
     experiment: ExperimentState,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
-    onRecenter: () -> Unit,
+    onSetStrikeLine: () -> Unit,
+    onAimDistance: (Double) -> Unit,
+    onNudge: (Double, Double, Double) -> Unit,
+    onLaneSpacing: (Double) -> Unit,
+    onRunwayLength: (Double) -> Unit,
+    onTempo: (Int) -> Unit,
+    onPlaying: (Boolean) -> Unit,
+    onRestart: () -> Unit,
     onStreaming: (Boolean) -> Unit,
 ) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
+        modifier = Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("G2 World Anchor", style = MaterialTheme.typography.headlineMedium)
-        Text("On-device face detection · no marker required", style = MaterialTheme.typography.bodySmall)
+        Text("G2 Piano Waterfall", style = MaterialTheme.typography.headlineMedium)
+        Text("Hot Cross Buns · face-tracked · no marker", style = MaterialTheme.typography.bodySmall)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -234,18 +249,92 @@ private fun ExperimentScreen(
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Piano calibration", style = MaterialTheme.typography.labelMedium)
+                Text(
+                    if (experiment.piano == null) {
+                        "Look at the middle A key at the playing edge, then set the strike line."
+                    } else {
+                        "Strike line fixed in the phone's world frame. Use 1–2 cm nudges to align it."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Text(
+                    String.format(
+                        Locale.US,
+                        "aim %.2f m · keys %.1f mm · runway %.2f m · %d BPM",
+                        experiment.settings.aimDistanceMeters,
+                        experiment.settings.laneSpacingMeters * 1000.0,
+                        experiment.settings.runwayLengthMeters,
+                        experiment.settings.tempoBpm,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onAimDistance(-0.05) }, modifier = Modifier.weight(1f)) { Text("−5 cm") }
+                    Button(
+                        onClick = onSetStrikeLine,
+                        enabled = experiment.filteredEye != null,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Set strike") }
+                    Button(onClick = { onAimDistance(0.05) }, modifier = Modifier.weight(1f)) { Text("+5 cm") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onNudge(-0.01, 0.0, 0.0) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("←") }
+                    Button(onClick = { onNudge(0.01, 0.0, 0.0) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("→") }
+                    Button(onClick = { onNudge(0.0, -0.01, 0.0) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("↑") }
+                    Button(onClick = { onNudge(0.0, 0.01, 0.0) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("↓") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onNudge(0.0, 0.0, -0.02) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("Away") }
+                    Button(onClick = { onNudge(0.0, 0.0, 0.02) }, enabled = experiment.piano != null, modifier = Modifier.weight(1f)) { Text("Closer") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onLaneSpacing(-0.002) }, modifier = Modifier.weight(1f)) { Text("Keys −") }
+                    Button(onClick = { onLaneSpacing(0.002) }, modifier = Modifier.weight(1f)) { Text("Keys +") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onRunwayLength(-0.05) }, modifier = Modifier.weight(1f)) { Text("Depth −") }
+                    Button(onClick = { onRunwayLength(0.05) }, modifier = Modifier.weight(1f)) { Text("Depth +") }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Button(onClick = { onTempo(-4) }, modifier = Modifier.weight(1f)) { Text("BPM −") }
+                    Button(onClick = { onTempo(4) }, modifier = Modifier.weight(1f)) { Text("BPM +") }
+                }
+            }
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Lens preview", style = MaterialTheme.typography.labelMedium)
-                Text("G2 output: full-screen 576×288 fast line mode", style = MaterialTheme.typography.bodySmall)
+                Text("G2 output: 48×10 full-screen fast text waterfall", style = MaterialTheme.typography.bodySmall)
                 val preview = experiment.preview
                 if (preview != null) {
                     Image(
                         bitmap = preview.asImageBitmap(),
-                        contentDescription = "G2 cube frame",
+                        contentDescription = "Piano note waterfall preview",
                         modifier = Modifier.width(288.dp).height(144.dp).background(Color.Black),
                         contentScale = ContentScale.FillBounds,
                     )
                 } else {
-                    Text("No frame yet — face the camera, then tap Recenter.")
+                    Text("No frame yet — keep your face visible and set the strike line.")
                 }
                 Text(
                     String.format(
@@ -264,7 +353,11 @@ private fun ExperimentScreen(
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(onClick = onRecenter, enabled = experiment.filteredEye != null) { Text("Recenter") }
+            Button(
+                onClick = { onPlaying(!experiment.playing) },
+                enabled = experiment.piano != null,
+            ) { Text(if (experiment.playing) "Pause" else "Play") }
+            Button(onClick = onRestart, enabled = experiment.piano != null) { Text("Restart") }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = experiment.streaming, onCheckedChange = onStreaming)
                 Text(" G2 stream", style = MaterialTheme.typography.bodyMedium)
@@ -284,8 +377,8 @@ private fun ExperimentScreen(
         }
 
         Text(
-            "Setup: phone fixed in portrait orientation, front camera at eye height, 0.4–1.5 m away. " +
-                "Use even frontal lighting and keep both eyes visible for the best translation estimate.",
+            "Setup: phone fixed vertically on the music stand with the front camera seeing your face. " +
+                "Calibration uses your downward head direction plus the simulated aim distance; the runway then stays fixed to the phone.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

@@ -16,6 +16,9 @@ import android.content.pm.ServiceInfo
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +27,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-class BridgeService : Service() {
+class BridgeService : Service(), LifecycleOwner {
 
     companion object {
         private const val CHANNEL_ID = "g2bridge"
@@ -37,6 +40,8 @@ class BridgeService : Service() {
     }
 
     private val binder = LocalBinder()
+    private val lifecycleRegistry = LifecycleRegistry(this)
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var stateJob: Job? = null
 
@@ -48,6 +53,9 @@ class BridgeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
         connection = G2Connection(applicationContext)
         createChannel()
         startForegroundCompat(buildNotification("Starting…"))
@@ -73,10 +81,13 @@ class BridgeService : Service() {
     fun disconnectGlasses() = connection.disconnect()
 
     override fun onDestroy() {
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         httpServer?.stop()
         connection.shutdown()
         stateJob?.cancel()
         scope.cancel()
+        lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         super.onDestroy()
     }
 
@@ -112,9 +123,19 @@ class BridgeService : Service() {
 
     private fun startForegroundCompat(notification: Notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            startForeground(
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
+            )
         } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+            startForeground(
+                NOTIF_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA,
+            )
         } else {
             startForeground(NOTIF_ID, notification)
         }

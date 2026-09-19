@@ -1,6 +1,6 @@
 # G2 World Anchor — face-tracked prototype
 
-An Android proof-of-concept for a stationary Pixel and Even Realities G2 glasses. The front camera estimates the wearer’s head pose from their face alone. A fixed-world wireframe cube is reprojected from the moving eye pose and streamed to one centered G2 image container.
+An Android proof-of-concept for a stationary Pixel and Even Realities G2 glasses. The front camera estimates the wearer’s head pose from their face alone. A fixed-world wireframe cube is reprojected from the moving eye pose and streamed as a compact native-text line frame across the full G2 display.
 
 No marker, printed target, or external tracking aid is used.
 
@@ -21,14 +21,14 @@ Pixel front camera
         |
  world cube -> eye transform -> calibrated projection
         |
- 288 x 144 monochrome frame
+ full-resolution phone preview + 48 x 10 ASCII line frame
         +---------------------> immediate phone preview
         |
  conflated newest-frame queue (no stale backlog)
         |
- high-priority BLE / EvenHub image protocol
+ high-priority BLE / flicker-free EvenHub text upgrades
         |
- centered G2 image container
+ full-lens 576 x 288 native text container
 ```
 
 ## Tracking model
@@ -62,7 +62,9 @@ The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 6. Move your head laterally and verify the phone preview cube counter-moves as though fixed in the room. Dashed world-axis lines and the edge locator continue to indicate the anchor when the cube leaves the view.
 7. Exit any Even Hub `.ehpk` before tapping **Connect G2**; the Even app and this native app cannot own the glasses BLE connection simultaneously.
 
-The Lens preview reports phone render FPS separately from completed G2 frame FPS and BLE transfer time. The phone path is camera-driven and never waits for BLE; the G2 path keeps only the newest pending frame.
+The Lens preview reports phone render FPS separately from completed G2 frame FPS and BLE transfer time. The phone path is camera-driven and never waits for BLE; the G2 path keeps only the newest pending frame. The glasses use flicker-free text-container upgrades because bitmap frames are inherently too slow for responsive head tracking over the available G2 transport. Consecutive fixed-size text frames are diffed, so only their smallest changed span crosses BLE. CameraX is owned by the camera-typed foreground service, so tracking and G2 updates continue when another app covers the activity; the activity also keeps the display awake while visible.
+
+The BLE protobuf framer is boundary-tested around the 232-byte ATT chunk size. Transport failures are contained inside the stream worker and surfaced in the UI instead of terminating the Android process.
 
 ## Calibration priorities
 

@@ -43,9 +43,11 @@ object Protocol {
      * dropped by the firmware → reassembly abort, so size [chunk] to the MTU.
      */
     fun framePb(seq: Int, sid: Int, flag: Int, pb: ByteArray, chunk: Int = 232): List<ByteArray> {
+        require(chunk in 3..255) { "BLE payload chunk must be 3..255 bytes" }
         val crcv = Crc16.ccitt(pb)
         val crc = byteArrayOf((crcv and 0xFF).toByte(), ((crcv shr 8) and 0xFF).toByte())
         val totalFrags = maxOf(1, (pb.size + 2 + chunk - 1) / chunk)
+        require(totalFrags <= 255) { "payload needs $totalFrags fragments; protocol limit is 255" }
         val frames = ArrayList<ByteArray>(totalFrags)
         var off = 0
         for (i in 0 until totalFrags) {
@@ -53,9 +55,20 @@ object Protocol {
             val chunkBytes: ByteArray = if (isLast) {
                 pb.copyOfRange(off, pb.size) + crc
             } else {
-                pb.copyOfRange(off, minOf(off + chunk, pb.size))
+                // Balance payload across the remaining packets while reserving
+                // two bytes for the CRC in the final packet. The old greedy
+                // offset increment could advance past pb.size at boundaries
+                // such as 463 bytes with a 232-byte chunk, crashing the app.
+                val framesIncludingCurrent = totalFrags - i
+                val framesAfter = framesIncludingCurrent - 1
+                val capacityAfter = (framesAfter - 1) * chunk + (chunk - 2)
+                val remaining = pb.size - off
+                val minimumTake = maxOf(0, remaining - capacityAfter)
+                val balancedTake = (remaining + framesIncludingCurrent - 1) / framesIncludingCurrent
+                val take = maxOf(minimumTake, balancedTake).coerceAtMost(chunk)
+                pb.copyOfRange(off, off + take)
             }
-            off = if (isLast) pb.size else off + chunk
+            off += if (isLast) pb.size - off else chunkBytes.size
             val header = byteArrayOf(
                 0xAA.toByte(), 0x21.toByte(), seq.toByte(), (chunkBytes.size and 0xFF).toByte(),
                 (totalFrags and 0xFF).toByte(), ((i + 1) and 0xFF).toByte(),
@@ -63,6 +76,7 @@ object Protocol {
             )
             frames.add(header + chunkBytes)
         }
+        check(off == pb.size) { "framing consumed $off of ${pb.size} payload bytes" }
         return frames
     }
 

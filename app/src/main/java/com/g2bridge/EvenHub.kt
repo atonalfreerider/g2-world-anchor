@@ -158,6 +158,18 @@ object EvenHub {
         return uintF(1, Cmd.CREATE) + uintF(2, magic) + msgF(3, create)
     }
 
+    /** Cmd=0 CREATE a startup page with one full-lens TEXT container. */
+    fun createText(
+        name: String, content: String, geom: ListGeom = ListGeom(),
+        containerId: Int = 1, widgetId: Int = 10000,
+        captureEvents: Boolean = true, magic: Int = 201
+    ): ByteArray {
+        var create = uintF(1, 1)
+        create += msgF(3, textObj(containerId, name, content, captureEvents, geom))
+        create += uintF(5, widgetId)
+        return uintF(1, Cmd.CREATE) + uintF(2, magic) + msgF(3, create)
+    }
+
     /** Cmd=7 REBUILD an existing LIST container (same name) with new rows. */
     fun rebuildList(
         name: String, items: List<String>, geom: ListGeom = ListGeom(),
@@ -179,10 +191,19 @@ object EvenHub {
     }
 
     /** Cmd=5 in-place TEXT upgrade (flicker-free). Full snapshot from offset 0. */
-    fun textUpgrade(containerId: Int = 1, name: String, content: String, magic: Int): ByteArray {
+    fun textUpgrade(
+        containerId: Int = 1,
+        name: String,
+        content: String,
+        contentOffset: Int = 0,
+        contentLength: Int = 0,
+        magic: Int,
+    ): ByteArray {
         val bytes = (if (content.isEmpty()) "·" else content).toByteArray(Charsets.UTF_8)
-        val up = uintF(1, containerId) + strF(2, validName(name)) + uintF(3, 0) +
-            uintF(4, bytes.size) + bytesF(5, bytes)
+        // Offset=0 and length=0 are omitted by proto3 and mean replace the full
+        // snapshot. Nonzero values enable a smaller in-place delta update.
+        val up = uintF(1, containerId) + strF(2, validName(name)) +
+            uintF(3, contentOffset) + uintF(4, contentLength) + bytesF(5, bytes)
         return uintF(1, Cmd.UPDATE_TEXT) + uintF(2, magic) + msgF(9, up)  // TextUpgrade=9
     }
 

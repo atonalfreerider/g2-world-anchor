@@ -9,12 +9,13 @@ Demonstrate a world-stable monocular cube on G2 using only the stationary Pixel�
 | Area | Decision | Reason |
 |---|---|---|
 | Phone runtime | Native Android app | CameraX and BLE can run continuously with explicit lifecycle control. |
+| Background lifetime | Camera + connected-device foreground service | App switches do not pause face inference or freeze the last G2 frame. |
 | Detection | Bundled ML Kit face detector | On-device operation, no marker, no first-run model download. |
 | Rotation | Face pitch/yaw/roll | Direct head-orientation output from the detector. |
 | Translation | Eye midpoint plus apparent IPD | Produces approximate cyclopean-eye position from face landmarks alone. |
 | World frame | Fixed phone front-camera frame | The stationary phone supplies a local room reference without SLAM. |
 | Stabilization | Adaptive pose filter plus bounded translation prediction | Reduces face-landmark shimmer and part of transport latency. |
-| Display | Centered 288×144 image container | Keeps transfer cost below a full 576×288 frame. |
+| Display | Full-lens 576×288 native text container | Compact in-place updates cover the whole canvas without bitmap-transfer latency. |
 | Scheduling | Camera-driven preview plus conflated G2 queue | Phone rendering never blocks on BLE and obsolete frames are discarded. |
 | Locator | Dashed world-axis vanishing lines plus edge marker | Keeps the fixed anchor direction legible outside the narrow display. |
 
@@ -40,7 +41,7 @@ The cosine term compensates approximately for yaw foreshortening. At angles wher
 - phone render FPS remains independent of completed G2 transfer FPS;
 - vanishing guides remain tied to the fixed anchor and an edge marker appears off-screen;
 - no OpenCV or AprilTag code/library in the APK;
-- sustainable G2 image-transfer rate measured separately from detector rate.
+- sustainable G2 text-frame rate measured separately from detector rate.
 
 ## Important limitations
 

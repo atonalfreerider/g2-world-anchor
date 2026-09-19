@@ -9,6 +9,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -62,6 +63,7 @@ class MainActivity : ComponentActivity() {
             if (svc != null) {
                 stateCollectJob?.cancel()
                 stateCollectJob = lifecycleScope.launch { svc.state.collect { g2State.value = it } }
+                startCamera()
                 if (connectWhenBound) {
                     connectWhenBound = false
                     svc.connectGlasses()
@@ -70,6 +72,9 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
+            cameraTracker?.stop()
+            cameraTracker = null
+            cameraStarted = false
             service = null
             stateCollectJob?.cancel()
             g2State.value = G2State(G2Status.DISCONNECTED, "service disconnected")
@@ -79,8 +84,7 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             if (result.values.all { it }) {
-                startCamera()
-                if (connectWhenBound) startBridgeAndConnect()
+                ensureBridgeService(connect = connectWhenBound)
             }
             else g2State.value = G2State(G2Status.ERROR, "camera/Bluetooth permissions denied")
         }
@@ -88,6 +92,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.attributes = window.attributes.apply { preferredRefreshRate = 120f }
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         anchorController = WorldAnchorController(lifecycleScope) { service?.connection }
 
         setContent {
@@ -105,7 +110,8 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (hasAllPermissions()) startCamera() else permissionLauncher.launch(requiredPermissions())
+        if (hasAllPermissions()) ensureBridgeService(connect = false)
+        else permissionLauncher.launch(requiredPermissions())
     }
 
     override fun onDestroy() {
@@ -118,8 +124,11 @@ class MainActivity : ComponentActivity() {
 
     private fun startCamera() {
         if (cameraStarted) return
+        val owner = service ?: return
         try {
-            val tracker = FrontCameraTracker(this, this, anchorController::onTrackerStatus)
+            // The foreground service remains RESUMED while another activity is
+            // visible, so CameraX and face pose do not freeze on app switches.
+            val tracker = FrontCameraTracker(applicationContext, owner, anchorController::onTrackerStatus)
             cameraTracker = tracker
             tracker.start()
             cameraStarted = true
@@ -132,23 +141,30 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startBridgeAndConnect() {
+        ensureBridgeService(connect = true)
+    }
+
+    private fun ensureBridgeService(connect: Boolean) {
+        if (connect) connectWhenBound = true
         service?.let {
-            connectWhenBound = false
-            it.connectGlasses()
+            startCamera()
+            if (connectWhenBound) {
+                connectWhenBound = false
+                it.connectGlasses()
+            }
             return
         }
-        connectWhenBound = true
         if (serviceBound) return
         try {
             val intent = Intent(this, BridgeService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
             serviceBound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
             if (!serviceBound) {
-                connectWhenBound = false
+                if (connect) connectWhenBound = false
                 g2State.value = G2State(G2Status.ERROR, "could not bind glasses service")
             }
         } catch (t: Throwable) {
-            connectWhenBound = false
+            if (connect) connectWhenBound = false
             g2State.value = G2State(G2Status.ERROR, "glasses service failed: ${t.message ?: t.javaClass.simpleName}")
         }
     }
@@ -219,6 +235,7 @@ private fun ExperimentScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Lens preview", style = MaterialTheme.typography.labelMedium)
+                Text("G2 output: full-screen 576×288 fast line mode", style = MaterialTheme.typography.bodySmall)
                 val preview = experiment.preview
                 if (preview != null) {
                     Image(

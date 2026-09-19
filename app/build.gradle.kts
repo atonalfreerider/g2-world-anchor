@@ -13,8 +13,8 @@ android {
         applicationId = "com.g2worldanchor"
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.3.1"
+        versionCode = 10
+        versionName = "0.3.5"
         ndk { abiFilters += "arm64-v8a" }
     }
 

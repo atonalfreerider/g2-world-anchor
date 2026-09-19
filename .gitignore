@@ -1,6 +1,13 @@
 # Gradle build output and caches
 .gradle/
 **/build/
+/.kotlin/
+
+# Codex task scratch space and packaged deliverables
+/work/
+/outputs/
+/.agents/
+/.codex/
 
 # Local Android SDK configuration
 local.properties

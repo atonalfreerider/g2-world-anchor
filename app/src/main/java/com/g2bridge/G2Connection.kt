@@ -782,6 +782,84 @@ class G2Connection(private val appContext: Context) {
         log("image link tuned: right=HIGH/2M preference, left=BALANCED")
     }
 
+    /**
+     * Fast full-lens frame using native text rather than bitmap transfer.
+     * A 48x10 ASCII frame is roughly 500 bytes and normally fits in three ATT
+     * writes; the former BMP4 path required about 21 KB plus image reassembly.
+     */
+    suspend fun displayFastFrame(content: String): Boolean = streamMutex.withLock {
+        if (!right.ready) { log("displayFastFrame: right arm not ready"); return@withLock false }
+        tuneImageLinkOnce()
+        heartbeatJob?.cancel(); heartbeatJob = null
+        clearDisplay()
+
+        if (!nativeCreated || nativeShape != NativeShape.TEXT) {
+            if (evenHubPrimed) {
+                val shutdownMagic = nextMagic()
+                fireEvenHub(EvenHub.shutDown(magic = shutdownMagic), shutdownMagic, 800).await()
+                evenHubPrimed = false
+                nativeCreated = false
+                nativeShape = NativeShape.NONE
+                imageMode = false
+                nativeMode = false
+                warmedUp = false
+                tileFP.clear()
+                delay(80)
+            }
+            writeTo(right, EvenHub.PRELUDE)
+            delay(250)
+            // Firmware CREATE uses the conventional startup magic 201 and may
+            // render successfully without returning a response packet.
+            val magic = 201
+            val result = fireEvenHub(
+                EvenHub.createText(nativeName, content, magic = magic),
+                magic,
+                1_500,
+            ).await()
+            val ok = result == null || ehOK(result)
+            if (ok) {
+                evenHubPrimed = true
+                nativeCreated = true
+                nativeShape = NativeShape.TEXT
+                nativeMode = true
+                imageMode = false
+                lastTextContent[nativeName] = content
+            }
+            startHeartbeat()
+            log("displayFastFrame create (${content.toByteArray().size}B): result=${result ?: "no-ack"}")
+            return@withLock ok
+        }
+
+        val previous = lastTextContent[nativeName]
+        val patch = previous?.let { TextWorldRenderer.diff(it, content) }
+        if (patch == null && previous != null) {
+            startHeartbeat()
+            return@withLock false
+        }
+        val magic = nextMagic()
+        // Full replacement is encoded as offset=0/length=0. Otherwise send the
+        // smallest contiguous changed span; fixed-size ASCII frames make this
+        // safe and often reduce a pose update to one ATT packet.
+        val useDelta = patch != null && patch.content.length < content.length
+        val result = fireEvenHub(
+            EvenHub.textUpgrade(
+                name = nativeName,
+                content = if (useDelta) patch!!.content else content,
+                contentOffset = if (useDelta) patch!!.offset else 0,
+                contentLength = if (useDelta) patch!!.replacedLength else 0,
+                magic = magic,
+            ),
+            magic,
+            900,
+        ).await()
+        val ok = ehOK(result)
+        if (ok) lastTextContent[nativeName] = content
+        startHeartbeat()
+        val sentBytes = if (useDelta) patch!!.content.toByteArray().size else content.toByteArray().size
+        log("displayFastFrame ${if (useDelta) "delta" else "full"} ($sentBytes/${content.toByteArray().size}B): result=${result ?: "no-ack"}")
+        ok
+    }
+
     /** Sacrificial first stream - the firmware drops the first Cmd=3 burst after a CREATE. */
     private suspend fun streamWarmup(c: EvenHub.ImageContainer, bmp: ByteArray): Boolean {
         val sid = nextSession()

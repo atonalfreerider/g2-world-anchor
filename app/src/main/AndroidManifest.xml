@@ -38,6 +38,8 @@
     <!-- API 34+ typed foreground service for the BLE connection. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE"
         tools:targetApi="34" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"
+        tools:targetApi="34" />
     <!-- Show the persistent notification (API 33+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -62,6 +64,6 @@
         <service
             android:name=".BridgeService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|camera" />
     </application>
 </manifest>

@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const packagePath = resolve(projectRoot, process.argv[2] ?? '../build/g2-piano-waterfall-evenhub-v0.2.0.ehpk')
+const packagePath = resolve(projectRoot, process.argv[2] ?? '../build/g2-piano-waterfall-evenhub-v0.3.0.ehpk')
 const manifest = JSON.parse(await readFile(join(projectRoot, 'app.json'), 'utf8'))
 const sdkPackage = JSON.parse(await readFile(join(projectRoot, 'node_modules/@evenrealities/even_hub_sdk/package.json'), 'utf8'))
 
@@ -15,7 +15,12 @@ function assert(condition, message) {
 assert(/^com\.[a-z0-9.]+$/.test(manifest.package_id), 'Invalid package_id')
 assert(/^\d+\.\d+\.\d+$/.test(manifest.version), 'Version must be semver')
 assert(manifest.entrypoint === 'index.html', 'Entrypoint must be index.html')
-assert(Array.isArray(manifest.permissions) && manifest.permissions.length === 0, 'Companion should need no permissions')
+assert(Array.isArray(manifest.permissions) && manifest.permissions.length === 1, 'Companion should request only network access')
+assert(manifest.permissions[0].name === 'network', 'Companion permission must be network')
+assert(
+  JSON.stringify(manifest.permissions[0].whitelist) === JSON.stringify(['http://127.0.0.1:8080']),
+  'Network permission must be restricted to the phone-local tracker',
+)
 assert(manifest.min_sdk_version === sdkPackage.version, 'Manifest SDK version does not match installed SDK')
 assert(manifest.min_app_version === sdkPackage.minAppVersion, 'Manifest app floor does not match SDK requirement')
 

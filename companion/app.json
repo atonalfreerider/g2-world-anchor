@@ -2,10 +2,16 @@
   "package_id": "com.g2worldanchor.pianolab",
   "edition": "202601",
   "name": "G2 Piano Waterfall",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.15",
   "entrypoint": "index.html",
-  "permissions": [],
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Reads live piano tracking frames from the companion tracker on this phone.",
+      "whitelist": ["http://127.0.0.1:8080"]
+    }
+  ],
   "supported_languages": ["en"]
 }

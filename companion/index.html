@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#07110b" />
-    <title>G2 Piano Waterfall Lab</title>
+    <title>G2 Piano Waterfall</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <main>
       <header>
-        <span class="eyebrow">EVEN G2 · NATIVE TEXT COMPANION</span>
+        <span class="eyebrow">EVEN G2 · PHONE-LOCAL COMPANION</span>
         <h1>Piano Waterfall</h1>
-        <p>Play Hot Cross Buns through a full-lens, low-latency text waterfall.</p>
+        <p>Streams the face-tracked Hot Cross Buns projection from Piano Tracker on this phone.</p>
       </header>
 
       <section class="card status-card">
@@ -35,15 +35,15 @@
       </section>
 
       <section class="card">
-        <h2>Display-space calibration</h2>
+        <h2>World-space calibration</h2>
         <p class="calibration" id="calibration"></p>
         <div class="controls two">
-          <button type="button" data-action="left">Center ←</button>
-          <button type="button" data-action="right">Center →</button>
-          <button type="button" data-action="width-down">Lanes −</button>
-          <button type="button" data-action="width-up">Lanes +</button>
-          <button type="button" data-action="strike-up">Strike ↑</button>
-          <button type="button" data-action="strike-down">Strike ↓</button>
+          <button type="button" data-action="left">World ←</button>
+          <button type="button" data-action="right">World →</button>
+          <button type="button" data-action="up">World ↑</button>
+          <button type="button" data-action="down">World ↓</button>
+          <button type="button" data-action="keys-down">Keys −</button>
+          <button type="button" data-action="keys-up">Keys +</button>
           <button type="button" data-action="depth-down">Depth −</button>
           <button type="button" data-action="depth-up">Depth +</button>
         </div>
@@ -55,8 +55,8 @@
       </section>
 
       <section class="card note">
-        <h2>Tracking boundary</h2>
-        <p>This Even Hub package owns the glasses connection and runs a standalone simulated waterfall. Face tracking and physical world anchoring remain available only in the native Pixel APK; do not run both sessions at once.</p>
+        <h2>Correct launch order</h2>
+        <p>1. Open <strong>G2 Piano Tracker</strong>, grant Camera, and set the strike line. 2. Leave the tracker running. 3. Open this package in Even Hub. Even Hub alone owns the G2 connection; no laptop or Wi-Fi server is involved.</p>
       </section>
 
       <pre id="log" aria-live="polite"></pre>

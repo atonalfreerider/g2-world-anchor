@@ -34,15 +34,13 @@ data class ExperimentState(
 )
 
 private data class G2RenderRequest(
-    val predictedEye: Pose3,
-    val piano: PianoCalibration,
-    val songSeconds: Double,
-    val tempoBpm: Int,
+    val content: String,
 )
 
 class WorldAnchorController(
     private val scope: CoroutineScope,
     private val connection: () -> G2Connection?,
+    private val publishFrame: (BridgeFramePayload) -> Unit = {},
 ) {
     private val filter = PoseFilter()
     private val _state = MutableStateFlow(ExperimentState())
@@ -221,12 +219,26 @@ class WorldAnchorController(
         val frame = renderFrame(eye, piano, seconds, state.settings.tempoBpm)
         val measuredLatency = state.g2TransferMs.toDouble().takeIf { it > 0.0 } ?: 80.0
         val request = G2RenderRequest(
-            filter.predict(eye, measuredLatency),
-            piano,
-            seconds,
-            state.settings.tempoBpm,
+            TextWorldRenderer.renderPiano(
+                filter.predict(eye, measuredLatency),
+                piano,
+                seconds,
+                state.settings.tempoBpm,
+            ),
         )
         latestG2Request = request
+
+        val ageMs = if (lastPoseAt == 0L) Long.MAX_VALUE else (now - lastPoseAt) / 1_000_000
+        publishFrame(
+            BridgeFramePayload(
+                frame = request.content,
+                tracking = ageMs <= 1_500,
+                calibrated = true,
+                playing = state.playing,
+                tempoBpm = state.settings.tempoBpm,
+                songSeconds = seconds,
+            ),
+        )
 
         previewWindowFrames++
         if (previewWindowStartedAt == 0L) previewWindowStartedAt = now
@@ -258,13 +270,7 @@ class WorldAnchorController(
                 if (g2?.state?.value?.status != G2Status.READY) continue
 
                 val started = System.nanoTime()
-                val frame = TextWorldRenderer.renderPiano(
-                    request.predictedEye,
-                    request.piano,
-                    request.songSeconds,
-                    request.tempoBpm,
-                )
-                val sent = g2.displayFastFrame(frame)
+                val sent = g2.displayFastFrame(request.content)
                 val finished = System.nanoTime()
                 if (!sent) continue
 

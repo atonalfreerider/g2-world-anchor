@@ -1,4 +1,4 @@
-// Tiny local HTTP server (NanoHTTPD) exposing the G2 bridge on the LAN.
+// Tiny loopback-only server exposing the newest tracked text frame to Even Hub.
 //
 // Endpoints (mirror the iOS bridge):
 //   POST /text   JSON {"text": "..."}    → teleprompter text on both arms
@@ -6,8 +6,8 @@
 //   GET  /status                          → JSON connection status
 //   GET  /                                → human-readable help page
 //
-// Binds to 0.0.0.0 so anything on the network can POST to http://<wifi-ip>:8080.
-// No auth - intended for a trusted local network only.
+// It never listens on Wi-Fi. The native tracker and Even app WebView communicate
+// entirely inside the phone, with no laptop or external server at runtime.
 
 package com.g2bridge
 
@@ -20,15 +20,20 @@ class HttpServer(
     port: Int,
     private val connection: G2Connection,
     private val scope: CoroutineScope,
-) : NanoHTTPD(port) {
+    private val frames: FrameBridge,
+    private val onControl: (String) -> Boolean,
+) : NanoHTTPD("127.0.0.1", port) {
 
     private val httpPort = port
 
     override fun serve(session: IHTTPSession): Response {
-        return try {
+        val response = try {
             when {
+                session.method == Method.OPTIONS -> json(Response.Status.OK, """{"ok":true}""")
                 session.method == Method.GET && session.uri == "/" -> help()
+                session.method == Method.GET && session.uri == "/frame" -> frame()
                 session.method == Method.GET && session.uri == "/status" -> status()
+                session.method == Method.POST && session.uri == "/control" -> control(session)
                 session.method == Method.POST && session.uri == "/text" -> postText(session)
                 session.method == Method.POST && session.uri == "/image" -> postImage(session)
                 else -> json(Response.Status.NOT_FOUND, """{"error":"not found"}""")
@@ -36,6 +41,11 @@ class HttpServer(
         } catch (e: Exception) {
             json(Response.Status.INTERNAL_ERROR, """{"error":${quote(e.message ?: "error")}}""")
         }
+        response.addHeader("Access-Control-Allow-Origin", "*")
+        response.addHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        response.addHeader("Access-Control-Allow-Headers", "Content-Type")
+        response.addHeader("Cache-Control", "no-store, max-age=0")
+        return response
     }
 
     // ---- handlers -----------------------------------------------------------
@@ -64,28 +74,43 @@ class HttpServer(
 
     private fun status(): Response {
         val s = connection.state.value
+        val snapshot = frames.snapshot()
         return json(
             Response.Status.OK,
-            """{"status":${quote(s.status.name.lowercase())},"detail":${quote(s.detail)}}"""
+            """{"tracker_bridge":"ready","sequence":${snapshot.sequence},"direct_g2":${quote(s.status.name.lowercase())},"detail":${quote(s.detail)}}"""
         )
+    }
+
+    private fun frame(): Response {
+        val snapshot = frames.snapshot()
+        val payload = snapshot.payload
+        return json(
+            Response.Status.OK,
+            """{"sequence":${snapshot.sequence},"generated_at_ms":${snapshot.generatedAtMs},"frame":${quote(payload.frame)},"tracking":${payload.tracking},"calibrated":${payload.calibrated},"playing":${payload.playing},"tempo_bpm":${payload.tempoBpm},"song_seconds":${payload.songSeconds}}""",
+        )
+    }
+
+    private fun control(session: IHTTPSession): Response {
+        val body = readBody(session).trim()
+        val action = extractJsonString(body, "action") ?: body
+        if (action.isBlank()) return json(Response.Status.BAD_REQUEST, """{"error":"missing action"}""")
+        if (!onControl(action)) return json(Response.Status.BAD_REQUEST, """{"error":"unknown action"}""")
+        return json(Response.Status.OK, """{"ok":true,"action":${quote(action)}}""")
     }
 
     private fun help(): Response {
         val html = """
-            <html><head><title>g2-bridge</title>
+            <html><head><title>G2 Piano Tracker</title>
             <style>body{font-family:monospace;max-width:640px;margin:2em auto;line-height:1.5}</style>
             </head><body>
-            <h2>g2-bridge - Even Realities G2 over BLE</h2>
-            <p>Status: <b>${connection.state.value.status.name.lowercase()}</b></p>
+            <h2>G2 Piano Tracker - phone-local Even Hub bridge</h2>
+            <p>The Even Hub eHPK reads this service only from 127.0.0.1.</p>
             <pre>
-POST /text    {"text": "hello"}      push a line of text to the lens
-POST /image   (raw PNG/JPEG body)    push an image (scaled to 576x288)
-GET  /status                         JSON connection status
+GET  /frame          newest 48x10 tracked waterfall frame
+POST /control        plain-text action (toggle, restart, left...)
+GET  /status         bridge and optional direct-G2 debug status
             </pre>
-            <p>Example:</p>
-            <pre>curl -X POST http://&lt;this-ip&gt;:$httpPort/text \
-     -H "Content-Type: application/json" \
-     -d '{"text":"hello from curl"}'</pre>
+            <p>Loopback endpoint: http://127.0.0.1:$httpPort/frame</p>
             </body></html>
         """.trimIndent()
         return newFixedLengthResponse(Response.Status.OK, "text/html", html)
@@ -176,6 +201,32 @@ GET  /status                         JSON connection status
         }
         // Not JSON - treat the whole body as the text.
         return body.trim()
+    }
+
+    private fun extractJsonString(body: String, field: String): String? {
+        if (body.isBlank()) return null
+        val key = "\"$field\""
+        val keyIndex = body.indexOf(key)
+        if (keyIndex < 0) return null
+        var index = body.indexOf(':', keyIndex + key.length)
+        if (index < 0) return null
+        index++
+        while (index < body.length && body[index].isWhitespace()) index++
+        if (index >= body.length || body[index] != '"') return null
+        index++
+        val value = StringBuilder()
+        while (index < body.length) {
+            val char = body[index]
+            if (char == '"') return value.toString()
+            if (char == '\\' && index + 1 < body.length) {
+                value.append(body[index + 1])
+                index += 2
+            } else {
+                value.append(char)
+                index++
+            }
+        }
+        return null
     }
 
     private fun quote(s: String): String {

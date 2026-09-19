@@ -1,23 +1,31 @@
 # G2 Piano Waterfall — Even Hub companion
 
-This standalone `.ehpk` plays **Hot Cross Buns** as a native-text note
-waterfall through the official Even Hub SDK. It uses one full-lens 576×288 text
-container represented by a fixed 48×10 ASCII frame.
+This `.ehpk` is the G2 display half of the phone-only piano system. It does not
+simulate tracking and it does not need a laptop or LAN server. The Even app and
+the native **G2 Piano Tracker** APK run together on the same Android phone:
 
-## Runtime design
+```text
+front camera -> Piano Tracker APK -> 127.0.0.1:8080 -> this eHPK -> G2
+```
 
-- The complete 16-beat G–A–B melody loops at an adjustable tempo.
-- A four-beat default lookahead maps simulated depth onto the available rows.
-- Converging lane rails and beat bands make the display read as a runway.
-- The app computes the smallest contiguous text edit and sends partial
-  `TextContainerUpgrade` operations; a conflated queue discards obsolete frames.
-- Single-tap on the glasses pauses or resumes playback; double-tap exits.
-- No permissions, image transfers, network connection, or external MIDI file
-  are required.
+The APK publishes only the newest 48×10 face-tracked waterfall frame. This
+package polls that loopback endpoint, conflates obsolete frames, and sends the
+smallest contiguous native-text update through the official Even Hub SDK.
+Even Hub is the sole owner of the glasses connection.
 
-The phone-side Even Hub page provides controls for tempo, horizontal centering,
-lane spacing, strike row, simulated depth, restart, and pause/play. These are
-display-space adjustments, not physical world calibration.
+## Install and run
+
+1. Install `g2-piano-tracker-v0.5.0.apk` on the phone.
+2. Import/install `g2-piano-waterfall-evenhub-v0.3.0.ehpk` in Even Hub.
+3. Open **G2 Piano Tracker**, grant Camera, make sure tracking is live, and tap
+   **Set strike** while looking at the middle A-key strike point.
+4. Leave the tracker running and return to Even Hub.
+5. Open **G2 Piano Waterfall**. Do not connect the app's optional direct-BLE
+   debug mode.
+
+The tracker foreground service keeps camera tracking and the loopback endpoint
+alive while Even Hub is in front. Single-tap the glasses to pause/play;
+double-tap exits. Phone controls in the eHPK forward to the tracker.
 
 ## Build, package, and validate
 
@@ -28,12 +36,5 @@ npm run validate
 ```
 
 The package is written to
-`../build/g2-piano-waterfall-evenhub-v0.2.0.ehpk`.
-
-## Tracking boundary
-
-The Even app owns the glasses connection while this package runs, so the native
-Pixel APK cannot simultaneously stream its face-tracked world projection. Exit
-the `.ehpk` before testing the APK's direct-BLE path. Use this package for a
-fast, standalone text-waterfall baseline; use the APK for head-tracked physical
-keyboard alignment.
+`../build/g2-piano-waterfall-evenhub-v0.3.0.ehpk`. Its only permission is
+network access whitelisted to `http://127.0.0.1:8080`.

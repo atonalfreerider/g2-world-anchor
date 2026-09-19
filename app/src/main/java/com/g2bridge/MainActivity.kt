@@ -50,10 +50,9 @@ import java.util.Locale
 class MainActivity : ComponentActivity() {
     private var service: BridgeService? = null
     private val g2State = MutableStateFlow(G2State(G2Status.DISCONNECTED, "service not bound"))
+    private val experimentState = MutableStateFlow(ExperimentState())
     private var stateCollectJob: Job? = null
-    private lateinit var anchorController: WorldAnchorController
-    private var cameraTracker: FrontCameraTracker? = null
-    private var cameraStarted = false
+    private var experimentCollectJob: Job? = null
     private var serviceBound = false
     private var connectWhenBound = false
 
@@ -64,7 +63,11 @@ class MainActivity : ComponentActivity() {
             if (svc != null) {
                 stateCollectJob?.cancel()
                 stateCollectJob = lifecycleScope.launch { svc.state.collect { g2State.value = it } }
-                startCamera()
+                experimentCollectJob?.cancel()
+                experimentCollectJob = lifecycleScope.launch {
+                    svc.controller.state.collect { experimentState.value = it }
+                }
+                svc.startTracking()
                 if (connectWhenBound) {
                     connectWhenBound = false
                     svc.connectGlasses()
@@ -73,11 +76,9 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onServiceDisconnected(name: ComponentName?) {
-            cameraTracker?.stop()
-            cameraTracker = null
-            cameraStarted = false
             service = null
             stateCollectJob?.cancel()
+            experimentCollectJob?.cancel()
             g2State.value = G2State(G2Status.DISCONNECTED, "service disconnected")
         }
     }
@@ -94,58 +95,37 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.attributes = window.attributes.apply { preferredRefreshRate = 120f }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        anchorController = WorldAnchorController(lifecycleScope) { service?.connection }
-
         setContent {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     ExperimentScreen(
                         glasses = g2State.collectAsState().value,
-                        experiment = anchorController.state.collectAsState().value,
+                        experiment = experimentState.collectAsState().value,
                         onConnect = { ensurePermissionsThen(::startBridgeAndConnect) },
                         onDisconnect = { service?.disconnectGlasses() },
-                        onSetStrikeLine = anchorController::setStrikeLine,
-                        onAimDistance = anchorController::adjustAimDistance,
-                        onNudge = anchorController::nudgePiano,
-                        onLaneSpacing = anchorController::adjustLaneSpacing,
-                        onRunwayLength = anchorController::adjustRunwayLength,
-                        onTempo = anchorController::adjustTempo,
-                        onPlaying = anchorController::setPlaying,
-                        onRestart = anchorController::restartSong,
-                        onStreaming = anchorController::setStreaming,
+                        onSetStrikeLine = { service?.controller?.setStrikeLine() },
+                        onAimDistance = { service?.controller?.adjustAimDistance(it) },
+                        onNudge = { x, y, z -> service?.controller?.nudgePiano(x, y, z) },
+                        onLaneSpacing = { service?.controller?.adjustLaneSpacing(it) },
+                        onRunwayLength = { service?.controller?.adjustRunwayLength(it) },
+                        onTempo = { service?.controller?.adjustTempo(it) },
+                        onPlaying = { service?.controller?.setPlaying(it) },
+                        onRestart = { service?.controller?.restartSong() },
+                        onStreaming = { service?.controller?.setStreaming(it) },
                     )
                 }
             }
         }
 
-        if (hasAllPermissions()) ensureBridgeService(connect = false)
-        else permissionLauncher.launch(requiredPermissions())
+        if (hasTrackingPermission()) ensureBridgeService(connect = false)
+        else permissionLauncher.launch(trackingPermissions())
     }
 
     override fun onDestroy() {
-        anchorController.setStreaming(false)
-        cameraTracker?.stop()
         stateCollectJob?.cancel()
+        experimentCollectJob?.cancel()
         if (serviceBound) runCatching { unbindService(serviceConnection) }
         super.onDestroy()
-    }
-
-    private fun startCamera() {
-        if (cameraStarted) return
-        val owner = service ?: return
-        try {
-            // The foreground service remains RESUMED while another activity is
-            // visible, so CameraX and face pose do not freeze on app switches.
-            val tracker = FrontCameraTracker(applicationContext, owner, anchorController::onTrackerStatus)
-            cameraTracker = tracker
-            tracker.start()
-            cameraStarted = true
-            anchorController.setStreaming(true)
-        } catch (t: Throwable) {
-            anchorController.onTrackerStatus(
-                TrackerStatus(message = "camera startup failed: ${t.message ?: t.javaClass.simpleName}"),
-            )
-        }
     }
 
     private fun startBridgeAndConnect() {
@@ -155,7 +135,7 @@ class MainActivity : ComponentActivity() {
     private fun ensureBridgeService(connect: Boolean) {
         if (connect) connectWhenBound = true
         service?.let {
-            startCamera()
+            it.startTracking()
             if (connectWhenBound) {
                 connectWhenBound = false
                 it.connectGlasses()
@@ -177,7 +157,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun requiredPermissions(): Array<String> = buildList {
+    private fun trackingPermissions(): Array<String> = arrayOf(Manifest.permission.CAMERA)
+
+    private fun directG2Permissions(): Array<String> = buildList {
         add(Manifest.permission.CAMERA)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             add(Manifest.permission.BLUETOOTH_SCAN)
@@ -190,12 +172,21 @@ class MainActivity : ComponentActivity() {
         }
     }.toTypedArray()
 
-    private fun hasAllPermissions() = requiredPermissions().all {
+    private fun hasTrackingPermission() = trackingPermissions().all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    private fun hasDirectG2Permissions() = directG2Permissions().all {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
     }
 
     private fun ensurePermissionsThen(onGranted: () -> Unit) {
-        if (hasAllPermissions()) onGranted() else permissionLauncher.launch(requiredPermissions())
+        if (hasDirectG2Permissions()) {
+            onGranted()
+        } else {
+            connectWhenBound = true
+            permissionLauncher.launch(directG2Permissions())
+        }
     }
 }
 
@@ -219,8 +210,20 @@ private fun ExperimentScreen(
         modifier = Modifier.fillMaxSize().statusBarsPadding().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("G2 Piano Waterfall", style = MaterialTheme.typography.headlineMedium)
-        Text("Hot Cross Buns · face-tracked · no marker", style = MaterialTheme.typography.bodySmall)
+        Text("G2 Piano Tracker", style = MaterialTheme.typography.headlineMedium)
+        Text("Hot Cross Buns · phone-only runtime · no marker", style = MaterialTheme.typography.bodySmall)
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Even Hub mode", style = MaterialTheme.typography.labelMedium)
+                Text("Tracker bridge active", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Calibrate here, leave this tracker running, then open G2 Piano Waterfall in Even Hub. " +
+                        "The eHPK owns the glasses connection; no laptop is used.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -324,7 +327,7 @@ private fun ExperimentScreen(
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Lens preview", style = MaterialTheme.typography.labelMedium)
-                Text("G2 output: 48×10 full-screen fast text waterfall", style = MaterialTheme.typography.bodySmall)
+                Text("eHPK output: 48×10 full-screen fast text waterfall", style = MaterialTheme.typography.bodySmall)
                 val preview = experiment.preview
                 if (preview != null) {
                     Image(
@@ -360,13 +363,14 @@ private fun ExperimentScreen(
             Button(onClick = onRestart, enabled = experiment.piano != null) { Text("Restart") }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = experiment.streaming, onCheckedChange = onStreaming)
-                Text(" G2 stream", style = MaterialTheme.typography.bodyMedium)
+                Text(" Direct G2 debug", style = MaterialTheme.typography.bodyMedium)
             }
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("Glasses", style = MaterialTheme.typography.labelMedium)
+                Text("Optional direct-BLE debug", style = MaterialTheme.typography.labelMedium)
+                Text("Leave disconnected when using the Even Hub eHPK.", style = MaterialTheme.typography.bodySmall)
                 Text(glasses.status.name.lowercase(), style = MaterialTheme.typography.titleMedium)
                 if (glasses.detail.isNotBlank()) Text(glasses.detail, style = MaterialTheme.typography.bodySmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {

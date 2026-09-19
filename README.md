@@ -1,18 +1,30 @@
-# G2 World Anchor — face-tracked prototype
+# G2 Piano Tracker + Waterfall
 
-An Android proof-of-concept for a stationary Pixel and Even Realities G2 glasses. The front camera estimates the wearer’s head pose from their face alone. A fixed-world wireframe cube is reprojected from the moving eye pose and streamed as a compact native-text line frame across the full G2 display.
+An on-phone, face-tracked piano note waterfall for a stationary Pixel and Even
+Realities G2 glasses. The front camera estimates the player's head pose without
+a tag. **Hot Cross Buns** is projected into a calibrated keyboard space and
+rendered through G2's fast native-text path.
 
 No marker, printed target, or external tracking aid is used.
 
-The `dev` branch currently exercises this tracking system as a calibrated piano
-note waterfall for **Hot Cross Buns**. See [PIANO_TESTING.md](PIANO_TESTING.md)
-for the physical setup, phone controls, and simulated-distance model.
+The complete runtime uses two installable phone packages. A laptop is needed
+only to build or install them:
+
+```text
+G2 Piano Tracker APK                  G2 Piano Waterfall eHPK
+camera + head pose + calibration  -> localhost newest-frame bridge
+                                      -> Even Hub SDK -> G2 display
+```
+
+Only Even Hub owns the glasses connection. The APK's direct G2 controls are an
+optional transport diagnostic and must remain disconnected during normal use.
+See [PIANO_TESTING.md](PIANO_TESTING.md) for setup and calibration.
 
 ## Repository layout
 
 ```text
-app/          Android face tracking, phone preview, and direct G2 transport
-companion/    Standalone Even Hub text-waterfall source
+app/          Android tracking, calibration, preview, and loopback frame server
+companion/    Even Hub G2 display client
 gradle/       Pinned Gradle wrapper
 ```
 
@@ -23,7 +35,7 @@ are intentionally excluded from Git.
 ## Architecture
 
 ```text
-Pixel front camera
+Pixel front camera (G2 Piano Tracker APK)
         |
  CameraX YUV frames
         |
@@ -35,14 +47,16 @@ Pixel front camera
         |
  filtered/predicted head pose in the fixed phone frame
         |
- world cube -> eye transform -> calibrated projection
+ fixed piano runway -> eye transform -> calibrated projection
         |
- full-resolution phone preview + 48 x 10 ASCII line frame
+ full-resolution phone preview + newest 48 x 10 ASCII frame
         +---------------------> immediate phone preview
         |
- conflated newest-frame queue (no stale backlog)
+ loopback-only HTTP + CORS (127.0.0.1:8080)
         |
- high-priority BLE / flicker-free EvenHub text upgrades
+ G2 Piano Waterfall eHPK in the Even phone app
+        |
+ conflated smallest-span native-text updates
         |
  full-lens 576 x 288 native text container
 ```
@@ -77,23 +91,29 @@ npm run pack
 npm run validate
 ```
 
-The companion package is written to
-`build/g2-piano-waterfall-evenhub-v0.2.0.ehpk` at the repository root. It runs
-the same melody as a standalone native-text waterfall with display-space
-controls. The Android app remains the face-tracked physical-world runtime, and
-the two paths cannot own the glasses connection simultaneously.
+The companion is written to
+`build/g2-piano-waterfall-evenhub-v0.3.0.ehpk`. It requires the tracker APK on
+the same phone and requests network access only for `127.0.0.1:8080`.
 
 ## First run
 
-1. Fix the Pixel in portrait orientation with the front camera near eye height, approximately 0.4–1.5 m away.
-2. Use even frontal lighting and keep the face unobstructed. Both eyes visible gives the most stable depth estimate.
-3. Open **G2 World Anchor** and grant Camera and Nearby Devices permissions.
-4. Confirm the Tracking card reports `tracking face`, plausible `x/y/z`, live pitch/yaw/roll, and a nonzero frame rate.
-5. Tap **Recenter** while looking naturally toward the phone.
-6. Move your head laterally and verify the phone preview cube counter-moves as though fixed in the room. Dashed world-axis lines and the edge locator continue to indicate the anchor when the cube leaves the view.
-7. Exit any Even Hub `.ehpk` before tapping **Connect G2**; the Even app and this native app cannot own the glasses BLE connection simultaneously.
+1. Install the APK and eHPK on the phone.
+2. Fix the Pixel vertically on the music stand with the front camera seeing your
+   face while you look down at the keyboard.
+3. Open **G2 Piano Tracker** and grant Camera. Nearby Devices is not needed for
+   the normal Even Hub workflow.
+4. Confirm live face data, choose the eye-to-key aim distance, look at the
+   middle A-key strike point, and tap **Set strike**.
+5. Leave the tracker running, open Even Hub, and launch **G2 Piano Waterfall**.
+6. Keep **Direct G2 debug** off in the tracker. Play/restart/calibrate from the
+   phone; a single glasses tap toggles playback.
 
-The Lens preview reports phone render FPS separately from completed G2 frame FPS and BLE transfer time. The phone path is camera-driven and never waits for BLE; the G2 path keeps only the newest pending frame. The glasses use flicker-free text-container upgrades because bitmap frames are inherently too slow for responsive head tracking over the available G2 transport. Consecutive fixed-size text frames are diffed, so only their smallest changed span crosses BLE. CameraX is owned by the camera-typed foreground service, so tracking and G2 updates continue when another app covers the activity; the activity also keeps the display awake while visible.
+The phone renderer never waits for the glasses. The APK publishes a conflated
+newest frame at its animation rate; the eHPK polls locally at up to 50 Hz and
+conflates again while a glasses update is in flight. Consecutive fixed-size text
+frames are diffed so only the smallest changed span crosses the G2 link.
+CameraX and the local server are owned by a camera-typed foreground service, so
+they continue when Even Hub covers the tracker activity.
 
 The BLE protobuf framer is boundary-tested around the 232-byte ATT chunk size. Transport failures are contained inside the stream worker and surfaced in the UI instead of terminating the Android process.
 

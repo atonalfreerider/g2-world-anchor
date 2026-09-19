@@ -6,12 +6,11 @@ import {
   TextContainerUpgrade,
   waitForEvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import {
-  DEFAULT_SETTINGS,
-  diffText,
-  renderWaterfall,
-  type WaterfallSettings,
-} from './waterfall'
+import { diagnosticFrame, diffText, normalizeFrame, type TrackerFrame } from './frame'
+
+const TRACKER_ORIGIN = 'http://127.0.0.1:8080'
+const POLL_INTERVAL_MS = 20
+const OFFLINE_AFTER_MS = 750
 
 const statusElement = document.querySelector<HTMLElement>('#status')!
 const detailElement = document.querySelector<HTMLElement>('#detail')!
@@ -33,41 +32,11 @@ function phoneStatus(title: string, detail: string, state: 'waiting' | 'ready' |
   dotElement.className = `dot ${state === 'waiting' ? '' : state}`
 }
 
-let settings: WaterfallSettings = { ...DEFAULT_SETTINGS }
-let playing = true
-let accumulatedBeat = 0
-let playbackStartedAt = performance.now()
-let completedFps = 0
-let lastTransferMs = 0
-let completedInWindow = 0
-let updateWindowStartedAt = performance.now()
+const waitingFrame = diagnosticFrame('OPEN PIANO TRACKER', 'CALIBRATE STRIKE LINE', 'THEN RETURN TO EVEN HUB')
+previewElement.textContent = waitingFrame
+phoneStatus('Waiting for Piano Tracker…', 'Open the tracker APK and grant camera access.')
 
-function currentBeat(now = performance.now()) {
-  if (!playing) return accumulatedBeat
-  return accumulatedBeat + (now - playbackStartedAt) / 1000 * settings.tempoBpm / 60
-}
-
-function elapsedForRender(now = performance.now()) {
-  return currentBeat(now) * 60 / settings.tempoBpm
-}
-
-function refreshPhone(frame: string) {
-  previewElement.textContent = frame
-  calibrationElement.textContent =
-    `center ${settings.centerColumn} · lanes ${settings.laneSpacing} cols · ` +
-    `strike row ${settings.strikeRow} · depth ${settings.lookaheadBeats} beats · ${settings.tempoBpm} BPM`
-  playbackButton.textContent = playing ? 'Pause' : 'Play'
-  phoneStatus(
-    playing ? 'Waterfall playing' : 'Waterfall paused',
-    `${completedFps.toFixed(1)} completed updates/s · ${lastTransferMs.toFixed(0)} ms last update`,
-    'ready',
-  )
-}
-
-const initialFrame = renderWaterfall(0, settings, playing)
-refreshPhone(initialFrame)
-
-const bridge = await waitForEvenAppBridge()
+const evenBridge = await waitForEvenAppBridge()
 const waterfall = new TextContainerProperty({
   xPosition: 0,
   yPosition: 0,
@@ -78,7 +47,7 @@ const waterfall = new TextContainerProperty({
   paddingLength: 0,
   containerID: 1,
   containerName: 'waterfall',
-  content: initialFrame,
+  content: waitingFrame,
   textColor: 4,
   isEventCapture: 1,
 })
@@ -87,16 +56,21 @@ const page = new CreateStartUpPageContainer({
   textObject: [waterfall],
 })
 
-const created = await bridge.createStartUpPageContainer(page)
-if (created !== StartUpPageCreateResult.success) {
-  throw new Error(`Glasses page creation failed (${created})`)
-}
+const created = await evenBridge.createStartUpPageContainer(page)
+if (created !== StartUpPageCreateResult.success) throw new Error(`Glasses page creation failed (${created})`)
 
-let desiredFrame = initialFrame
-let lastSentFrame = initialFrame
+let desiredFrame = waitingFrame
+let lastSentFrame = waitingFrame
+let lastSequence = -1
+let lastTrackerAt = 0
 let pumpActive = false
 let cleanedUp = false
-let animationTimer = 0
+let pollTimer = 0
+let completedFps = 0
+let lastTransferMs = 0
+let completedInWindow = 0
+let updateWindowStartedAt = performance.now()
+let offlineFrameShown = true
 
 function reportError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
@@ -118,7 +92,7 @@ async function pumpFrames() {
       if (!patch) break
       const useDelta = patch.content.length < target.length * 0.65
       const started = performance.now()
-      const ok = await bridge.textContainerUpgrade(new TextContainerUpgrade({
+      const ok = await evenBridge.textContainerUpgrade(new TextContainerUpgrade({
         containerID: 1,
         containerName: 'waterfall',
         contentOffset: useDelta ? patch.offset : 0,
@@ -140,8 +114,6 @@ async function pumpFrames() {
     }
   } catch (error) {
     reportError(error)
-    // Avoid a hot retry loop if the Even app or glasses temporarily rejects
-    // updates. The desired frame remains conflated and is retried after backoff.
     await new Promise(resolve => window.setTimeout(resolve, 250))
   } finally {
     pumpActive = false
@@ -149,57 +121,69 @@ async function pumpFrames() {
   }
 }
 
-function renderNow(now = performance.now()) {
-  const frame = renderWaterfall(elapsedForRender(now), settings, playing)
-  refreshPhone(frame)
-  queueFrame(frame)
+function showTracker(frame: TrackerFrame) {
+  const normalized = normalizeFrame(frame.frame)
+  previewElement.textContent = normalized
+  playbackButton.textContent = frame.playing ? 'Pause' : 'Play'
+  calibrationElement.textContent = frame.calibrated
+    ? `${frame.tracking ? 'face tracked' : 'tracking stale'} · ${frame.tempo_bpm} BPM · ${frame.song_seconds.toFixed(1)} s`
+    : 'Not calibrated — set the strike line in Piano Tracker.'
+  const age = Math.max(0, Date.now() - frame.generated_at_ms)
+  phoneStatus(
+    frame.calibrated ? (frame.tracking ? 'Live tracker connected' : 'Tracker waiting for face') : 'Tracker needs calibration',
+    `${completedFps.toFixed(1)} G2 updates/s · ${lastTransferMs.toFixed(0)} ms transfer · frame age ${age} ms`,
+    frame.tracking && frame.calibrated ? 'ready' : 'waiting',
+  )
+  offlineFrameShown = false
+  queueFrame(normalized)
 }
 
-function freezeBeat(now = performance.now()) {
-  accumulatedBeat = currentBeat(now)
-  playbackStartedAt = now
+async function pollTracker() {
+  if (cleanedUp) return
+  const started = performance.now()
+  try {
+    const response = await fetch(`${TRACKER_ORIGIN}/frame?t=${Date.now()}`, { cache: 'no-store' })
+    if (!response.ok) throw new Error(`tracker HTTP ${response.status}`)
+    const frame = await response.json() as TrackerFrame
+    if (!Number.isFinite(frame.sequence)) throw new Error('tracker response is invalid')
+    lastTrackerAt = performance.now()
+    if (frame.sequence !== lastSequence) {
+      lastSequence = frame.sequence
+      showTracker(frame)
+    }
+  } catch (error) {
+    const elapsed = performance.now() - lastTrackerAt
+    if (lastTrackerAt === 0 || elapsed >= OFFLINE_AFTER_MS) {
+      phoneStatus('Piano Tracker not reachable', 'Open the Piano Tracker APK; this eHPK does not simulate tracking.', 'error')
+      calibrationElement.textContent = 'The local bridge at 127.0.0.1:8080 is offline.'
+      previewElement.textContent = waitingFrame
+      if (!offlineFrameShown) {
+        queueFrame(waitingFrame)
+        offlineFrameShown = true
+        log(error instanceof Error ? error.message : String(error))
+      }
+    }
+  } finally {
+    const wait = Math.max(0, POLL_INTERVAL_MS - (performance.now() - started))
+    pollTimer = window.setTimeout(() => void pollTracker(), wait)
+  }
 }
 
-function togglePlayback() {
-  const now = performance.now()
-  freezeBeat(now)
-  playing = !playing
-  playbackStartedAt = now
-  renderNow(now)
-}
-
-function restart() {
-  accumulatedBeat = 0
-  playbackStartedAt = performance.now()
-  renderNow(playbackStartedAt)
-}
-
-function updateTempo(delta: number) {
-  const now = performance.now()
-  freezeBeat(now)
-  settings = { ...settings, tempoBpm: Math.max(40, Math.min(180, settings.tempoBpm + delta)) }
-  playbackStartedAt = now
-  renderNow(now)
-}
-
-function adjust(action: string) {
-  if (action === 'toggle') togglePlayback()
-  else if (action === 'restart') restart()
-  else if (action === 'tempo-down') updateTempo(-4)
-  else if (action === 'tempo-up') updateTempo(4)
-  else if (action === 'left') settings = { ...settings, centerColumn: Math.max(16, settings.centerColumn - 1) }
-  else if (action === 'right') settings = { ...settings, centerColumn: Math.min(31, settings.centerColumn + 1) }
-  else if (action === 'width-down') settings = { ...settings, laneSpacing: Math.max(5, settings.laneSpacing - 1) }
-  else if (action === 'width-up') settings = { ...settings, laneSpacing: Math.min(10, settings.laneSpacing + 1) }
-  else if (action === 'strike-up') settings = { ...settings, strikeRow: Math.max(5, settings.strikeRow - 1) }
-  else if (action === 'strike-down') settings = { ...settings, strikeRow: Math.min(8, settings.strikeRow + 1) }
-  else if (action === 'depth-down') settings = { ...settings, lookaheadBeats: Math.max(2, settings.lookaheadBeats - 1) }
-  else if (action === 'depth-up') settings = { ...settings, lookaheadBeats: Math.min(8, settings.lookaheadBeats + 1) }
-  renderNow()
+async function sendControl(action: string) {
+  try {
+    const response = await fetch(`${TRACKER_ORIGIN}/control`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: action,
+    })
+    if (!response.ok) throw new Error(`control ${action} failed (${response.status})`)
+  } catch (error) {
+    reportError(error)
+  }
 }
 
 for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-action]'))) {
-  button.addEventListener('click', () => adjust(button.dataset.action ?? ''))
+  button.addEventListener('click', () => void sendControl(button.dataset.action ?? ''))
 }
 
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
@@ -207,27 +191,26 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
   return envelope.eventType ?? OsEventTypeList.CLICK_EVENT
 }
 
-const unsubscribe = bridge.onEvenHubEvent(event => {
+const unsubscribe = evenBridge.onEvenHubEvent(event => {
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
   if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     cleanup()
-    bridge.shutDownPageContainer(1)
+    evenBridge.shutDownPageContainer(1)
   } else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
-    togglePlayback()
+    void sendControl('toggle')
   } else if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
     cleanup()
   }
 })
 
-animationTimer = window.setInterval(() => renderNow(), 33)
-
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
-  window.clearInterval(animationTimer)
+  window.clearTimeout(pollTimer)
   unsubscribe()
 }
 
 window.addEventListener('beforeunload', cleanup)
-log('Native text waterfall ready · tap glasses to pause/play')
+void pollTracker()
+log('Even Hub owns G2 · waiting for the phone-local tracker')

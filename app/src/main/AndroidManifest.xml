@@ -46,7 +46,7 @@
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
-        android:label="G2 Piano Waterfall"
+        android:label="G2 Piano Tracker"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
@@ -60,7 +60,7 @@
             </intent-filter>
         </activity>
 
-        <!-- The foreground service that owns the G2 BLE link + the HTTP server. -->
+        <!-- Foreground camera tracking + phone-local Even Hub frame server. -->
         <service
             android:name=".BridgeService"
             android:exported="false"

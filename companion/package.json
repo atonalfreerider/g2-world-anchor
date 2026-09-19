@@ -1,0 +1,22 @@
+{
+  "name": "g2-world-anchor-evenhub",
+  "private": true,
+  "version": "0.1.1",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5173",
+    "build": "tsc --noEmit && vite build",
+    "pack": "npm run build && mkdir -p ../build && evenhub pack app.json dist -o ../build/g2-world-anchor-companion.ehpk --sdk-ver 0.0.15",
+    "validate": "node scripts/validate.mjs ../build/g2-world-anchor-companion.ehpk"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "^0.0.15"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.3",
+    "@evenrealities/evenhub-simulator": "^0.9.3",
+    "qrcode": "^1.5.4",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.5"
+  }
+}

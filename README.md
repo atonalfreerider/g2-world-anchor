@@ -4,6 +4,18 @@ An Android proof-of-concept for a stationary Pixel and Even Realities G2 glasses
 
 No marker, printed target, or external tracking aid is used.
 
+## Repository layout
+
+```text
+app/          Android face tracking, phone preview, and direct G2 transport
+companion/    Even Hub display-calibration companion source
+gradle/       Pinned Gradle wrapper
+```
+
+This is a single source repository. Build outputs, packaged APK/eHPK files,
+dependency directories, IDE state, signing files, and local task scratch data
+are intentionally excluded from Git.
+
 ## Architecture
 
 ```text
@@ -51,6 +63,19 @@ export ANDROID_HOME=/usr/lib/android-sdk
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+
+### Even Hub companion
+
+```bash
+cd companion
+npm ci
+npm run pack
+npm run validate
+```
+
+The companion package is written to `build/g2-world-anchor-companion.ehpk` at
+the repository root. It is an independent display-calibration utility; the
+Android app remains the face-tracking runtime.
 
 ## First run
 

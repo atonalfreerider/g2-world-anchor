@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#07110b" />
+    <title>G2 World Anchor Lab</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <span class="eyebrow">EVEN G2 · CALIBRATION COMPANION</span>
+        <h1>World Anchor Lab</h1>
+        <p>Verify the centered 288×144 render surface before running the native Pixel tracker.</p>
+      </header>
+
+      <section class="card status-card">
+        <span class="dot" id="statusDot"></span>
+        <div>
+          <strong id="status">Connecting to Even Hub…</strong>
+          <small id="detail">Waiting for the glasses bridge.</small>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Display pattern</h2>
+        <div class="patterns" id="patterns"></div>
+        <p class="hint">Single-tap the glasses to advance. Double-tap exits.</p>
+      </section>
+
+      <section class="card note">
+        <h2>Runtime boundary</h2>
+        <p>This package validates Even Hub image placement and transfer. Continuous camera tracking, pose filtering, recentering, and direct BLE streaming remain in the <b>G2 World Anchor</b> Android app.</p>
+      </section>
+
+      <pre id="log" aria-live="polite"></pre>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -245,7 +245,13 @@ class G2Connection(private val appContext: Context) {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             val arm = armFor(gatt) ?: return
             if (newState == BluetoothGatt.STATE_CONNECTED) {
-                log("${arm.side} connected - requesting MTU then discovering services")
+                log("${arm.side} connected - requesting high-throughput BLE link")
+                gatt.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                gatt.setPreferredPhy(
+                    BluetoothDevice.PHY_LE_2M_MASK,
+                    BluetoothDevice.PHY_LE_2M_MASK,
+                    BluetoothDevice.PHY_OPTION_NO_PREFERRED,
+                )
                 // Request a large MTU so EvenHub fragments fit in one ATT write.
                 if (!gatt.requestMtu(247)) gatt.discoverServices()
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
@@ -258,6 +264,11 @@ class G2Connection(private val appContext: Context) {
             if (status == BluetoothGatt.GATT_SUCCESS && arm === right) lastMtu = mtu
             log("${arm.side} MTU=$mtu (status $status) - discovering services")
             gatt.discoverServices()
+        }
+
+        override fun onPhyUpdate(gatt: BluetoothGatt, txPhy: Int, rxPhy: Int, status: Int) {
+            val arm = armFor(gatt) ?: return
+            log("${arm.side} PHY tx=$txPhy rx=$rxPhy status=$status")
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
@@ -626,6 +637,8 @@ class G2Connection(private val appContext: Context) {
     private var ehSession = 1
     private var ehNeedsJump = false
     private var ehAckMisses = 0
+    private var lastInlineHeartbeatAt = 0L
+    @Volatile private var imageLinkTuned = false
     private val ehWindow = 4
     private val tileFP = HashMap<Int, Int>()
     private var lastRenderFP = 0
@@ -679,6 +692,8 @@ class G2Connection(private val appContext: Context) {
         nativeCreated = false; nativeShape = NativeShape.NONE
         lastListRows.clear(); lastTextContent.clear()
         ehSession = 1; ehSeq = 0; ehMagic = 1; ehNeedsJump = false; ehAckMisses = 0
+        lastInlineHeartbeatAt = 0L
+        imageLinkTuned = false
         tileFP.clear(); lastRenderFP = 0
         scope.launch { ackLock.withLock { pendingAcks.values.forEach { it.resolve(null) }; pendingAcks.clear() } }
     }
@@ -700,7 +715,7 @@ class G2Connection(private val appContext: Context) {
     private suspend fun sendEvenHubAck(pb: ByteArray, magic: Int, timeoutMs: Long = 3000): Int? =
         fireEvenHub(pb, magic, timeoutMs).await()
 
-    /** Prelude + create the 4-tile image page. Primes the plugin task. */
+    /** Prelude + create the single image page. Primes the plugin task. */
     private suspend fun primeEvenHub() {
         if (nativeCreated) {
             val m = nextMagic()
@@ -724,20 +739,20 @@ class G2Connection(private val appContext: Context) {
 
     // ---- public image API ---------------------------------------------------
     /** Display a [bitmap] in the centered 288x144 low-latency image surface. */
-    suspend fun displayImage(bitmap: android.graphics.Bitmap) = streamMutex.withLock {
-        if (!left.ready || !right.ready) { log("displayImage: not ready"); return@withLock }
+    suspend fun displayImage(bitmap: android.graphics.Bitmap): Boolean = streamMutex.withLock {
+        if (!left.ready || !right.ready) { log("displayImage: not ready"); return@withLock false }
+        tuneImageLinkOnce()
         heartbeatJob?.cancel(); heartbeatJob = null
         imageMode = true; nativeMode = false
         clearDisplay()
         primeEvenHub()
 
-        val rendered = EvenHub.renderBitmapTiles(bitmap, 288, 144, 288, 144)
-        val tiles = rendered.mapIndexedNotNull { i, t -> if (i < grid.size) Pair(grid[i], t.bmp) else null }
+        val tiles = listOf(Pair(grid[0], EvenHub.renderBitmapSingle(bitmap, 288, 144)))
 
         var fp = 1
         for ((_, b) in tiles) fp = fp * 31 + b.contentHashCode()
         if (fp == lastRenderFP && warmedUp) {
-            log("displayImage: deduped (unchanged frame)"); startHeartbeat(); return@withLock
+            log("displayImage: deduped (unchanged frame)"); startHeartbeat(); return@withLock false
         }
 
         if (!warmedUp && tiles.isNotEmpty() && streamWarmup(grid[0], tiles[0].second)) warmedUp = true
@@ -750,6 +765,21 @@ class G2Connection(private val appContext: Context) {
         lastRenderFP = if (ok) fp else 0
         startHeartbeat()
         log("displayImage: ${if (ok) "ok" else "FAILED"} (${tiles.size} tiles, $ehAckMisses lifetime ack-misses)")
+        ok
+    }
+
+    /** Reserve the lowest-latency connection parameters for the data-carrying arm. */
+    private fun tuneImageLinkOnce() {
+        if (imageLinkTuned) return
+        left.gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
+        right.gatt?.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+        right.gatt?.setPreferredPhy(
+            BluetoothDevice.PHY_LE_2M_MASK,
+            BluetoothDevice.PHY_LE_2M_MASK,
+            BluetoothDevice.PHY_OPTION_NO_PREFERRED,
+        )
+        imageLinkTuned = true
+        log("image link tuned: right=HIGH/2M preference, left=BALANCED")
     }
 
     /** Sacrificial first stream - the firmware drops the first Cmd=3 burst after a CREATE. */
@@ -757,7 +787,7 @@ class G2Connection(private val appContext: Context) {
         val sid = nextSession()
         var idx = 0; var off = 0
         while (off < bmp.size) {
-            val end = minOf(off + 3800, bmp.size)
+            val end = minOf(off + 4096, bmp.size)
             val magic = nextMagic()
             val pb = EvenHub.imageRawData(c.id, c.name, sid, bmp.size, idx, bmp.copyOfRange(off, end), magic)
             if (fireEvenHub(pb, magic, 10000).await() == null) {
@@ -785,13 +815,13 @@ class G2Connection(private val appContext: Context) {
         outer@ for ((c, bmp) in tiles) {
             val f = bmp.contentHashCode()
             if (tileFP[c.id] == f) { log("tile ${c.name}: deduped"); continue }
-            sendImageHeartbeatInline()
+            sendImageHeartbeatInlineIfDue()
             val sid = nextSession()
             var idx = 0; var off = 0
             while (off < bmp.size) {
                 if (aborted) break@outer
                 while (inFlight.size >= ehWindow) { drainOne(); if (aborted) break@outer }
-                val end = minOf(off + 3800, bmp.size)
+                val end = minOf(off + 4096, bmp.size)
                 val magic = nextMagic()
                 val pb = EvenHub.imageRawData(c.id, c.name, sid, bmp.size, idx, bmp.copyOfRange(off, end), magic)
                 inFlight.addLast(fireEvenHub(pb, magic, 1000))
@@ -807,10 +837,13 @@ class G2Connection(private val appContext: Context) {
         return true
     }
 
-    /** One Cmd=12 heartbeat between messages (safe point) for the plugin watchdog. */
-    private suspend fun sendImageHeartbeatInline() {
+    /** Keep the plugin watchdog alive without spending a BLE write on every frame. */
+    private suspend fun sendImageHeartbeatInlineIfDue() {
+        val now = System.currentTimeMillis()
+        if (now - lastInlineHeartbeatAt < 1_000L) return
         val frames = Protocol.framePb(nextEhSeq(), EvenHub.SID, EvenHub.FLAG_REQUEST, EvenHub.heartbeat(nextMagic()), ehChunk)
         for (f in frames) writeTo(right, f)
+        lastInlineHeartbeatAt = now
     }
 
     private suspend fun recoverImageSession() {

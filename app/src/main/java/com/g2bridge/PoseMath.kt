@@ -37,8 +37,6 @@ data class Mat3(val m: DoubleArray) {
 
     companion object {
         val IDENTITY = Mat3(doubleArrayOf(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0))
-        /** Marker axes to cyclopean-eye axes for a front-facing forehead mount. */
-        val TAG_TO_EYE = Mat3(doubleArrayOf(-1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 1.0))
     }
 }
 
@@ -52,14 +50,6 @@ data class Pose3(
     fun transform(local: Vec3) = position + rotation * local
     fun inverseTransform(world: Vec3) = rotation.transpose() * (world - position)
 
-    fun eyeFromForeheadTag(tagToEyeMeters: Vec3 = Vec3(0.0, 0.0, -0.035)): Pose3 {
-        return Pose3(
-            position = transform(tagToEyeMeters),
-            rotation = rotation * Mat3.TAG_TO_EYE,
-            timestampNanos = timestampNanos,
-            reprojectionErrorPx = reprojectionErrorPx,
-        )
-    }
 }
 
 data class Quaternion(val w: Double, val x: Double, val y: Double, val z: Double) {
@@ -152,7 +142,10 @@ class PoseFilter(
         val q0 = Quaternion.fromMat3(prior.rotation)
         val q1 = Quaternion.fromMat3(raw.rotation)
         val angular = 2.0 * acos(min(1.0, max(-1.0, kotlin.math.abs(q0.dot(q1))))) / dt
-        val rotationAlpha = (alpha + angular * 0.025).coerceIn(alpha, 0.9)
+        // Very fast translation can legitimately push the adaptive position
+        // alpha above the rotation cap. Clamp against a fixed valid range;
+        // using alpha as the lower bound would create an empty range and throw.
+        val rotationAlpha = (alpha + angular * 0.025).coerceIn(0.0, 0.9)
         val filtered = Pose3(pos, q0.slerp(q1, rotationAlpha).toMat3(), raw.timestampNanos, raw.reprojectionErrorPx)
         lastVelocity = lastVelocity * 0.55 + velocity * 0.45
         last = filtered

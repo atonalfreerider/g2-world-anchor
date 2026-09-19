@@ -13,8 +13,8 @@ android {
         applicationId = "com.g2worldanchor"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 6
+        versionName = "0.3.1"
         ndk { abiFilters += "arm64-v8a" }
     }
 
@@ -66,9 +66,8 @@ dependencies {
     implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
     implementation("androidx.camera:camera-view:$cameraXVersion")
 
-    // Official OpenCV Android AAR. ArUco includes the AprilTag 36h11 detector;
-    // solvePnP(IPPE_SQUARE) produces a metric 6-DoF pose from the printed tag.
-    implementation("org.opencv:opencv:4.13.0")
+    // Bundled on-device model: no marker and no first-run model download.
+    implementation("com.google.mlkit:face-detection:16.1.7")
 
     // NanoHTTPD - the tiny local HTTP server.
     implementation("org.nanohttpd:nanohttpd:2.3.1")

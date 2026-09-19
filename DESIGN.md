@@ -1,107 +1,58 @@
-# Design plan
+# Face-tracked world-anchor design
 
-## Objective and success criterion
+## Objective
 
-Demonstrate that a stationary Pixel 10 can make a simple cube appear fixed in the room while the wearer translates and rotates their head. The first useful result is not “perfect AR”; it is measured evidence that residual anchor motion and latency are low enough to be convincing on the G2 display.
+Demonstrate a world-stable monocular cube on G2 using only the stationary Pixel’s front camera and on-device face/head-pose estimation. The wearer should need no printed marker or external tracking hardware.
 
-Target the first hardware session at:
-
-- continuous metric pose at 20+ camera estimates/s;
-- less than 5 mm static translation jitter after filtering;
-- less than 1° static orientation jitter;
-- at least 5 completed G2 image frames/s;
-- no more than 250 ms camera-to-glasses latency;
-- reacquisition within 0.5 s after a short occlusion.
-
-## Key decisions
+## Core decisions
 
 | Area | Decision | Reason |
 |---|---|---|
-| Phone runtime | One native Android app | It can own continuous CameraX capture and both BLE arms together. |
-| Tracking target | 45 mm AprilTag 36h11 ID 0 rigidly mounted to the glasses | A measured fiducial gives metric scale and sharper, more auditable pose than face landmarks. |
-| World frame | Fixed phone front-camera frame | The stand makes it a stable local reference without SLAM. |
-| Pose solve | Subpixel corners + `SOLVEPNP_IPPE_SQUARE` | Specialized for square planar targets and returns full metric 6-DoF pose. |
-| Stabilization | Adaptive low-pass plus bounded latency prediction | Reduces stationary shimmer without making movement needlessly sluggish. |
-| Display | One centered 288×144 image container | Avoids the four serial transfers needed for a full 576×288 image. |
-| Depth cue | Monoscopic perspective and motion parallax | Independent per-eye SDK rendering is unavailable; this still tests world anchoring. |
-| Transport | Direct G2 BLE bridge behind `G2Connection` | The official plugin camera API is single-shot and cannot supply continuous frames. |
+| Phone runtime | Native Android app | CameraX and BLE can run continuously with explicit lifecycle control. |
+| Detection | Bundled ML Kit face detector | On-device operation, no marker, no first-run model download. |
+| Rotation | Face pitch/yaw/roll | Direct head-orientation output from the detector. |
+| Translation | Eye midpoint plus apparent IPD | Produces approximate cyclopean-eye position from face landmarks alone. |
+| World frame | Fixed phone front-camera frame | The stationary phone supplies a local room reference without SLAM. |
+| Stabilization | Adaptive pose filter plus bounded translation prediction | Reduces face-landmark shimmer and part of transport latency. |
+| Display | Centered 288×144 image container | Keeps transfer cost below a full 576×288 frame. |
+| Scheduling | Camera-driven preview plus conflated G2 queue | Phone rendering never blocks on BLE and obsolete frames are discarded. |
+| Locator | Dashed world-axis vanishing lines plus edge marker | Keeps the fixed anchor direction legible outside the narrow display. |
 
-## Coordinate chain
+## Pose estimate
 
-All persistent world data uses the phone-camera coordinate system. The tracker estimates `T_camera_tag`. A measured mount transform produces `T_camera_eye`:
-
-```text
-T_camera_eye = T_camera_tag × T_tag_eye
-```
-
-Recenter creates a cube center 0.70 m along the eye's forward axis but stores it in camera/world coordinates. Every frame transforms each fixed cube vertex back into the current eye frame and applies the calibrated display projection:
+The detector returns face orientation and eye landmark pixels. With approximate focal length `f`, observed eye separation `d_px`, assumed real IPD `d_m`, and yaw `y`, depth is estimated as:
 
 ```text
-p_eye = inverse(T_camera_eye) × p_world
-u = cx + fx × p_eye.x / p_eye.z
-v = cy + fy × p_eye.y / p_eye.z
+z = f * d_m * cos(y) / d_px
+x = (eyeCenterX - cx) * z / f
+y = (eyeCenterY - cy) * z / f
 ```
 
-Vertices behind or extremely close to the eye plane are clipped.
+The cosine term compensates approximately for yaw foreshortening. At angles where both eye landmarks are unavailable, face-box width provides a lower-confidence fallback scale. Neutral gaze points toward the phone along camera `-Z`; head Euler rotations are composed around that neutral frame.
 
-## Delivery stages
+## Acceptance checks
 
-### Stage 0 — completed without hardware
+- `tracking face` without any marker in view;
+- stable tracking at 0.4–1.5 m under normal indoor light;
+- correct signs for lateral translation, yaw, pitch, and roll;
+- Recenter places the cube along current gaze;
+- the phone preview counter-moves during a slow lateral head sweep;
+- phone render FPS remains independent of completed G2 transfer FPS;
+- vanishing guides remain tied to the fixed anchor and an edge marker appears off-screen;
+- no OpenCV or AprilTag code/library in the APK;
+- sustainable G2 image-transfer rate measured separately from detector rate.
 
-- Research platform limits and choose native Android/direct BLE.
-- Implement CameraX/OpenCV tracker and pose-quality gates.
-- Implement math, filtering, prediction, cube renderer, and phone preview.
-- Adapt the G2 bridge to a centered single image surface.
-- Build the debug APK and pass JVM unit tests.
+## Important limitations
 
-### Stage 1 — Pixel only
+Face detection is not metric 6-DoF tracking by itself. Translation scale depends on assumed IPD, estimated camera intrinsics, landmark quality, and head angle. This design satisfies a marker-free interaction requirement, but it trades away the known scale and corner precision of a fiducial. Per-wearer IPD calibration and measured camera intrinsics are the first accuracy upgrades.
 
-- Install APK, grant permissions, and verify CameraX selects the front camera.
-- Confirm pose distance against tape-measured 0.6, 0.8, and 1.0 m positions.
-- Move the tag on a translation jig or ruler and log scale error/jitter.
-- Replace the estimated front-camera intrinsics with a calibration file.
-- Confirm the on-phone cube exhibits correct, stable counter-motion.
+## Failure modes
 
-Exit condition: metric scale error under 2%, static jitter under 5 mm, and no axis reversal.
-
-### Stage 2 — G2 static transport
-
-- Ensure the Even app has released both BLE arms.
-- Connect and verify the seven-packet authentication reaches `READY`.
-- Send a static cube and inspect location, clipping, brightness, and persistence.
-- Measure one-container transfer time and dropped acknowledgements.
-
-Exit condition: ten consecutive static image sends succeed without reconnecting.
-
-### Stage 3 — Dynamic anchor
-
-- Stream at the measured sustainable completion rate rather than a blind timer.
-- Film head motion and through-lens response at high frame rate.
-- Fit display focal length/center and translation-prediction horizon.
-- Run slow translation, yaw, pitch, and combined-motion trials.
-
-Exit condition: the cube visibly stays closer to the same real point than to the glasses during a ±10 cm lateral sweep.
-
-### Stage 4 — accuracy upgrade
-
-- Add calibrated lens distortion.
-- Replace one planar tag with a rigid two-face tag mount for wider pose coverage.
-- Solve tag-to-eye extrinsics through a guided sighting calibration.
-- Investigate G2 IMU units and fuse orientation only if timestamps and axes are trustworthy.
-
-## Failure modes and mitigations
-
-| Risk | Observable symptom | Mitigation |
+| Symptom | Likely cause | Mitigation |
 |---|---|---|
-| Wrong marker print scale | All translations/depth are proportionally wrong | Measure the inner black square with calipers and enter its actual size. |
-| Estimated camera intrinsics | Depth changes as the tag moves off-center | Run ChArUco calibration at the exact analysis resolution. |
-| Planar-pose ambiguity | Sudden orientation flip near frontal view | Reject jumps, use temporal prior, then add a second non-coplanar tag. |
-| Flexible marker mount | Cube moves when the glasses do not | Use rigid card/plastic fixed to the frame or headband. |
-| BLE throughput/latency | Cube trails motion or updates in steps | Keep one image container, conflate poses, predict to display time. |
-| G2 protocol/firmware change | Authentication or image ACKs fail | Capture logs, compare wire frames, and keep tracking/rendering testable without BLE. |
-| Phone movement | Entire virtual world shifts | Rigid, weighted stand; disable vibration; do not touch after Recenter. |
-| Optical calibration mismatch | Stable but angularly misregistered cube | Fit display focal length and optical center for the wearer and frame fit. |
-
-## Go/no-go decision after the experiment
-
-Proceed to calibration and multi-tag work if world anchoring is directionally correct and display latency is the main residual error. Stop pursuing this G2 path if measured image throughput is too low for tolerable motion parallax or if independent-eye output is a hard requirement; those are platform limits rather than tracking bugs.
+| Depth breathes | Landmark spacing noise or wrong IPD | Enter wearer IPD; strengthen temporal filtering. |
+| Pose drops on profile | One eye is occluded | Use face-width fallback; limit operating yaw. |
+| Horizontal motion reverses | Front-camera coordinate convention mismatch | Flip camera X once after physical validation. |
+| Cube trails motion | Camera/model/BLE latency | Measure latency, then tune bounded prediction. |
+| Whole world shifts | Phone stand moved | Use a rigid weighted stand. |
+| G2 disconnects | Even app still owns BLE | Exit the `.ehpk` before native direct-BLE testing. |

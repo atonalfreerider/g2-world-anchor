@@ -15,14 +15,27 @@ class PoseMathTest {
         assertEquals(local.z, recovered.z, 1e-6)
     }
 
-    @Test fun foreheadTagProducesForwardFacingEyeFrame() {
-        // Neutral front-facing printed tag from solvePnP: X right in camera,
-        // Y up, marker normal points toward the camera.
-        val tagRotation = Mat3(doubleArrayOf(1.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, -1.0))
-        val eye = Pose3(Vec3(0.0, 0.0, 0.8), tagRotation, 1L).eyeFromForeheadTag()
-        val forwardWorld = eye.rotation * Vec3(0.0, 0.0, 1.0)
+    @Test fun neutralFaceLooksTowardPhone() {
+        val rotation = FacePoseEstimator.headToCameraRotation(0.0, 0.0, 0.0)
+        val forwardWorld = rotation * Vec3(0.0, 0.0, 1.0)
         assertEquals(-1.0, forwardWorld.z, 1e-9)
-        assertEquals(0.835, eye.position.z, 1e-9)
+        assertEquals(0.0, forwardWorld.x, 1e-9)
+        assertEquals(0.0, forwardWorld.y, 1e-9)
+    }
+
+    @Test fun positiveFaceYawTurnsGazeTowardImageRight() {
+        val rotation = FacePoseEstimator.headToCameraRotation(0.0, 20.0, 0.0)
+        val forwardWorld = rotation * Vec3(0.0, 0.0, 1.0)
+        assertTrue(forwardWorld.x > 0.0)
+        assertTrue(forwardWorld.z < 0.0)
+    }
+
+    @Test fun eyeLandmarksProduceMetricDepthEstimate() {
+        val estimate = FacePoseEstimator.estimate(
+            FacePoseSample(360.0, 640.0, 40.0, 180.0, 0.0, 0.0, 0.0, 720, 1280, 1L),
+        )!!
+        assertEquals("eye landmarks", estimate.scaleSource)
+        assertTrue(estimate.pose.position.z in 0.8..1.0)
     }
 
     @Test fun quaternionMatrixRoundTripKeepsDirection() {
@@ -38,5 +51,19 @@ class PoseMathTest {
         val predicted = filter.predict(moving, 1_000.0) // internally capped at 220 ms
         assertTrue(predicted.position.x > moving.position.x)
         assertTrue(predicted.position.x < 0.2)
+    }
+
+    @Test fun poseFilterHandlesVeryFastTranslationWithoutInvalidRotationClamp() {
+        val filter = PoseFilter()
+        filter.update(Pose3(Vec3(0.0, 0.0, 1.0), Mat3.IDENTITY, 0L))
+        val fast = filter.update(
+            Pose3(
+                Vec3(0.75, -0.4, 0.35),
+                FacePoseEstimator.headToCameraRotation(25.0, 35.0, 10.0),
+                8_333_333L,
+            ),
+        )
+        assertTrue(fast.position.x.isFinite())
+        assertTrue(fast.rotation.m.all { it.isFinite() })
     }
 }

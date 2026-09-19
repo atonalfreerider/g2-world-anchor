@@ -51,7 +51,9 @@ class MainActivity : ComponentActivity() {
     private var stateCollectJob: Job? = null
     private lateinit var anchorController: WorldAnchorController
     private var cameraTracker: FrontCameraTracker? = null
-    private var subsystemsStarted = false
+    private var cameraStarted = false
+    private var serviceBound = false
+    private var connectWhenBound = false
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
@@ -60,6 +62,10 @@ class MainActivity : ComponentActivity() {
             if (svc != null) {
                 stateCollectJob?.cancel()
                 stateCollectJob = lifecycleScope.launch { svc.state.collect { g2State.value = it } }
+                if (connectWhenBound) {
+                    connectWhenBound = false
+                    svc.connectGlasses()
+                }
             }
         }
 
@@ -72,12 +78,16 @@ class MainActivity : ComponentActivity() {
 
     private val permissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-            if (result.values.all { it }) startSubsystems()
+            if (result.values.all { it }) {
+                startCamera()
+                if (connectWhenBound) startBridgeAndConnect()
+            }
             else g2State.value = G2State(G2Status.ERROR, "camera/Bluetooth permissions denied")
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.attributes = window.attributes.apply { preferredRefreshRate = 120f }
         anchorController = WorldAnchorController(lifecycleScope) { service?.connection }
 
         setContent {
@@ -86,7 +96,7 @@ class MainActivity : ComponentActivity() {
                     ExperimentScreen(
                         glasses = g2State.collectAsState().value,
                         experiment = anchorController.state.collectAsState().value,
-                        onConnect = { ensurePermissionsThen { service?.connectGlasses() } },
+                        onConnect = { ensurePermissionsThen(::startBridgeAndConnect) },
                         onDisconnect = { service?.disconnectGlasses() },
                         onRecenter = anchorController::recenter,
                         onStreaming = anchorController::setStreaming,
@@ -95,25 +105,52 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (hasAllPermissions()) startSubsystems() else permissionLauncher.launch(requiredPermissions())
+        if (hasAllPermissions()) startCamera() else permissionLauncher.launch(requiredPermissions())
     }
 
     override fun onDestroy() {
         anchorController.setStreaming(false)
         cameraTracker?.stop()
         stateCollectJob?.cancel()
-        runCatching { unbindService(serviceConnection) }
+        if (serviceBound) runCatching { unbindService(serviceConnection) }
         super.onDestroy()
     }
 
-    private fun startSubsystems() {
-        if (subsystemsStarted) return
-        subsystemsStarted = true
-        val intent = Intent(this, BridgeService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
-        bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-        cameraTracker = FrontCameraTracker(this, this, anchorController::onTrackerStatus).also { it.start() }
-        anchorController.setStreaming(true)
+    private fun startCamera() {
+        if (cameraStarted) return
+        try {
+            val tracker = FrontCameraTracker(this, this, anchorController::onTrackerStatus)
+            cameraTracker = tracker
+            tracker.start()
+            cameraStarted = true
+            anchorController.setStreaming(true)
+        } catch (t: Throwable) {
+            anchorController.onTrackerStatus(
+                TrackerStatus(message = "camera startup failed: ${t.message ?: t.javaClass.simpleName}"),
+            )
+        }
+    }
+
+    private fun startBridgeAndConnect() {
+        service?.let {
+            connectWhenBound = false
+            it.connectGlasses()
+            return
+        }
+        connectWhenBound = true
+        if (serviceBound) return
+        try {
+            val intent = Intent(this, BridgeService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+            serviceBound = bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
+            if (!serviceBound) {
+                connectWhenBound = false
+                g2State.value = G2State(G2Status.ERROR, "could not bind glasses service")
+            }
+        } catch (t: Throwable) {
+            connectWhenBound = false
+            g2State.value = G2State(G2Status.ERROR, "glasses service failed: ${t.message ?: t.javaClass.simpleName}")
+        }
     }
 
     private fun requiredPermissions(): Array<String> = buildList {
@@ -152,7 +189,7 @@ private fun ExperimentScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("G2 World Anchor", style = MaterialTheme.typography.headlineMedium)
-        Text("AprilTag 36h11 · ID 0 · 45 mm black square", style = MaterialTheme.typography.bodySmall)
+        Text("On-device face detection · no marker required", style = MaterialTheme.typography.bodySmall)
 
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
@@ -163,14 +200,18 @@ private fun ExperimentScreen(
                     Text(
                         String.format(
                             Locale.US,
-                            "x %.3f  y %.3f  z %.3f m · error %.2f px · %.1f fps",
+                            "x %.3f  y %.3f  z %.3f m · pitch %.1f°  yaw %.1f°  roll %.1f° · %.1f fps",
                             eye.position.x, eye.position.y, eye.position.z,
-                            eye.reprojectionErrorPx, experiment.tracker.fps,
+                            experiment.tracker.pitchDeg, experiment.tracker.yawDeg,
+                            experiment.tracker.rollDeg, experiment.tracker.fps,
                         ),
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (experiment.tracker.scaleSource.isNotBlank()) {
+                        Text("Depth scale: ${experiment.tracker.scaleSource}", style = MaterialTheme.typography.bodySmall)
+                    }
                 } else {
-                    Text("Hold the marker square-on to the front camera.", style = MaterialTheme.typography.bodySmall)
+                    Text("Keep your face visible to the front camera.", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -187,9 +228,21 @@ private fun ExperimentScreen(
                         contentScale = ContentScale.FillBounds,
                     )
                 } else {
-                    Text("No frame yet — detect the tag, then Recenter.")
+                    Text("No frame yet — face the camera, then tap Recenter.")
                 }
-                Text("${experiment.displayMessage} · ${experiment.framesSent} frames", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    String.format(
+                        Locale.US,
+                        "%s · phone %.1f fps (%d) · G2 %.1f fps / %d ms (%d)",
+                        experiment.displayMessage,
+                        experiment.previewFps,
+                        experiment.framesRendered,
+                        experiment.g2Fps,
+                        experiment.g2TransferMs,
+                        experiment.framesSent,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 
@@ -197,7 +250,7 @@ private fun ExperimentScreen(
             Button(onClick = onRecenter, enabled = experiment.filteredEye != null) { Text("Recenter") }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Switch(checked = experiment.streaming, onCheckedChange = onStreaming)
-                Text(" Stream", style = MaterialTheme.typography.bodyMedium)
+                Text(" G2 stream", style = MaterialTheme.typography.bodyMedium)
             }
         }
 
@@ -214,8 +267,8 @@ private fun ExperimentScreen(
         }
 
         Text(
-            "Setup: phone fixed in portrait orientation, front camera at eye height, 0.6–1.2 m away. " +
-                "Rigidly mount the printed tag above the bridge; measure the black square, not the paper.",
+            "Setup: phone fixed in portrait orientation, front camera at eye height, 0.4–1.5 m away. " +
+                "Use even frontal lighting and keep both eyes visible for the best translation estimate.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

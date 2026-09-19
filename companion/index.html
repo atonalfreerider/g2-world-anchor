@@ -4,15 +4,15 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#07110b" />
-    <title>G2 World Anchor Lab</title>
+    <title>G2 Piano Waterfall Lab</title>
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <main>
       <header>
-        <span class="eyebrow">EVEN G2 · CALIBRATION COMPANION</span>
-        <h1>World Anchor Lab</h1>
-        <p>Verify the centered 288×144 render surface before running the native Pixel tracker.</p>
+        <span class="eyebrow">EVEN G2 · NATIVE TEXT COMPANION</span>
+        <h1>Piano Waterfall</h1>
+        <p>Play Hot Cross Buns through a full-lens, low-latency text waterfall.</p>
       </header>
 
       <section class="card status-card">
@@ -24,14 +24,39 @@
       </section>
 
       <section class="card">
-        <h2>Display pattern</h2>
-        <div class="patterns" id="patterns"></div>
-        <p class="hint">Single-tap the glasses to advance. Double-tap exits.</p>
+        <h2>Playback</h2>
+        <div class="controls two">
+          <button type="button" data-action="toggle">Pause</button>
+          <button type="button" data-action="restart">Restart</button>
+          <button type="button" data-action="tempo-down">BPM −</button>
+          <button type="button" data-action="tempo-up">BPM +</button>
+        </div>
+        <p class="hint">Single-tap the glasses to pause/play. Double-tap exits.</p>
+      </section>
+
+      <section class="card">
+        <h2>Display-space calibration</h2>
+        <p class="calibration" id="calibration"></p>
+        <div class="controls two">
+          <button type="button" data-action="left">Center ←</button>
+          <button type="button" data-action="right">Center →</button>
+          <button type="button" data-action="width-down">Lanes −</button>
+          <button type="button" data-action="width-up">Lanes +</button>
+          <button type="button" data-action="strike-up">Strike ↑</button>
+          <button type="button" data-action="strike-down">Strike ↓</button>
+          <button type="button" data-action="depth-down">Depth −</button>
+          <button type="button" data-action="depth-up">Depth +</button>
+        </div>
+      </section>
+
+      <section class="card preview-card">
+        <h2>48 × 10 text frame</h2>
+        <pre class="preview" id="preview" aria-label="Glasses text preview"></pre>
       </section>
 
       <section class="card note">
-        <h2>Runtime boundary</h2>
-        <p>This package validates Even Hub image placement and transfer. Continuous camera tracking, pose filtering, recentering, and direct BLE streaming remain in the <b>G2 World Anchor</b> Android app.</p>
+        <h2>Tracking boundary</h2>
+        <p>This Even Hub package owns the glasses connection and runs a standalone simulated waterfall. Face tracking and physical world anchoring remain available only in the native Pixel APK; do not run both sessions at once.</p>
       </section>
 
       <pre id="log" aria-live="polite"></pre>

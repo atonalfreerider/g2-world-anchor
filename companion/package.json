@@ -1,13 +1,13 @@
 {
-  "name": "g2-world-anchor-evenhub",
+  "name": "g2-piano-waterfall-evenhub",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5173",
     "build": "tsc --noEmit && vite build",
-    "pack": "npm run build && mkdir -p ../build && evenhub pack app.json dist -o ../build/g2-world-anchor-companion.ehpk --sdk-ver 0.0.15",
-    "validate": "node scripts/validate.mjs ../build/g2-world-anchor-companion.ehpk"
+    "pack": "npm run build && mkdir -p ../build && evenhub pack app.json dist -o ../build/g2-piano-waterfall-evenhub-v0.2.0.ehpk --sdk-ver 0.0.15",
+    "validate": "node scripts/validate.mjs ../build/g2-piano-waterfall-evenhub-v0.2.0.ehpk"
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.15"

@@ -12,7 +12,7 @@ for the physical setup, phone controls, and simulated-distance model.
 
 ```text
 app/          Android face tracking, phone preview, and direct G2 transport
-companion/    Even Hub display-calibration companion source
+companion/    Standalone Even Hub text-waterfall source
 gradle/       Pinned Gradle wrapper
 ```
 
@@ -77,9 +77,11 @@ npm run pack
 npm run validate
 ```
 
-The companion package is written to `build/g2-world-anchor-companion.ehpk` at
-the repository root. It is an independent display-calibration utility; the
-Android app remains the face-tracking runtime.
+The companion package is written to
+`build/g2-piano-waterfall-evenhub-v0.2.0.ehpk` at the repository root. It runs
+the same melody as a standalone native-text waterfall with display-space
+controls. The Android app remains the face-tracked physical-world runtime, and
+the two paths cannot own the glasses connection simultaneously.
 
 ## First run
 

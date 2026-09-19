@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const packagePath = resolve(projectRoot, process.argv[2] ?? '../g2-world-anchor-companion.ehpk')
+const packagePath = resolve(projectRoot, process.argv[2] ?? '../build/g2-piano-waterfall-evenhub-v0.2.0.ehpk')
 const manifest = JSON.parse(await readFile(join(projectRoot, 'app.json'), 'utf8'))
 const sdkPackage = JSON.parse(await readFile(join(projectRoot, 'node_modules/@evenrealities/even_hub_sdk/package.json'), 'utf8'))
 

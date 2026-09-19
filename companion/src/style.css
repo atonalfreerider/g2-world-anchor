@@ -35,7 +35,9 @@ p { color: #9fb0a4; line-height: 1.55; }
 
 .dot.error { background: #ff6577; box-shadow: 0 0 18px #ff6577; }
 
-.patterns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.controls { display: grid; gap: 10px; }
+
+.controls.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 button { min-height: 52px; padding: 10px; color: #cfead7; border: 1px solid #244d32; border-radius: 11px; background: #0c2013; font: inherit; font-weight: 700; cursor: pointer; }
 
@@ -45,6 +47,23 @@ button:disabled { cursor: wait; opacity: .55; }
 
 .hint, .note p { margin: 12px 0 0; font-size: 13px; }
 
+.calibration { margin: 0 0 12px; font: 600 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.preview-card { overflow-x: auto; }
+
+.preview {
+  width: max-content;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  color: #dfffe8;
+  border: 1px solid #1e422b;
+  border-radius: 10px;
+  background: #020603;
+  font: 600 10px/1.25 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+
 pre { min-height: 48px; margin: 14px 2px 0; color: #688273; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
 
-@media (max-width: 420px) { .patterns { grid-template-columns: 1fr; } }
+@media (max-width: 360px) { .controls.two { grid-template-columns: 1fr; } }

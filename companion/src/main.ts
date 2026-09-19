@@ -1,24 +1,30 @@
 import {
   CreateStartUpPageContainer,
-  ImageContainerProperty,
-  ImageRawDataUpdate,
   OsEventTypeList,
   StartUpPageCreateResult,
   TextContainerProperty,
   TextContainerUpgrade,
   waitForEvenAppBridge,
 } from '@evenrealities/even_hub_sdk'
-import { FRAME_HEIGHT, FRAME_WIDTH, PATTERNS, type PatternId, renderPattern } from './patterns'
+import {
+  DEFAULT_SETTINGS,
+  diffText,
+  renderWaterfall,
+  type WaterfallSettings,
+} from './waterfall'
 
 const statusElement = document.querySelector<HTMLElement>('#status')!
 const detailElement = document.querySelector<HTMLElement>('#detail')!
 const dotElement = document.querySelector<HTMLElement>('#statusDot')!
-const patternsElement = document.querySelector<HTMLElement>('#patterns')!
+const previewElement = document.querySelector<HTMLElement>('#preview')!
+const calibrationElement = document.querySelector<HTMLElement>('#calibration')!
+const playbackButton = document.querySelector<HTMLButtonElement>('[data-action="toggle"]')!
 const logElement = document.querySelector<HTMLElement>('#log')!
 
 function log(message: string) {
   const timestamp = new Date().toLocaleTimeString()
-  logElement.textContent = `${timestamp}  ${message}\n${logElement.textContent ?? ''}`.trim().split('\n').slice(0, 8).join('\n')
+  logElement.textContent = `${timestamp}  ${message}\n${logElement.textContent ?? ''}`
+    .trim().split('\n').slice(0, 8).join('\n')
 }
 
 function phoneStatus(title: string, detail: string, state: 'waiting' | 'ready' | 'error' = 'waiting') {
@@ -27,30 +33,42 @@ function phoneStatus(title: string, detail: string, state: 'waiting' | 'ready' |
   dotElement.className = `dot ${state === 'waiting' ? '' : state}`
 }
 
-let activePattern: PatternId = 'anchor'
-let controlsEnabled = false
-for (const pattern of PATTERNS) {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.textContent = pattern.label
-  button.dataset.pattern = pattern.id
-  button.disabled = true
-  button.addEventListener('click', () => {
-    if (controlsEnabled) selectPattern(pattern.id).catch(reportError)
-  })
-  patternsElement.append(button)
+let settings: WaterfallSettings = { ...DEFAULT_SETTINGS }
+let playing = true
+let accumulatedBeat = 0
+let playbackStartedAt = performance.now()
+let completedFps = 0
+let lastTransferMs = 0
+let completedInWindow = 0
+let updateWindowStartedAt = performance.now()
+
+function currentBeat(now = performance.now()) {
+  if (!playing) return accumulatedBeat
+  return accumulatedBeat + (now - playbackStartedAt) / 1000 * settings.tempoBpm / 60
 }
 
-function updateButtons() {
-  for (const button of Array.from(patternsElement.querySelectorAll<HTMLButtonElement>('button'))) {
-    button.disabled = !controlsEnabled
-    button.classList.toggle('active', button.dataset.pattern === activePattern)
-  }
+function elapsedForRender(now = performance.now()) {
+  return currentBeat(now) * 60 / settings.tempoBpm
 }
+
+function refreshPhone(frame: string) {
+  previewElement.textContent = frame
+  calibrationElement.textContent =
+    `center ${settings.centerColumn} · lanes ${settings.laneSpacing} cols · ` +
+    `strike row ${settings.strikeRow} · depth ${settings.lookaheadBeats} beats · ${settings.tempoBpm} BPM`
+  playbackButton.textContent = playing ? 'Pause' : 'Play'
+  phoneStatus(
+    playing ? 'Waterfall playing' : 'Waterfall paused',
+    `${completedFps.toFixed(1)} completed updates/s · ${lastTransferMs.toFixed(0)} ms last update`,
+    'ready',
+  )
+}
+
+const initialFrame = renderWaterfall(0, settings, playing)
+refreshPhone(initialFrame)
 
 const bridge = await waitForEvenAppBridge()
-
-const eventLayer = new TextContainerProperty({
+const waterfall = new TextContainerProperty({
   xPosition: 0,
   yPosition: 0,
   width: 576,
@@ -59,38 +77,14 @@ const eventLayer = new TextContainerProperty({
   borderColor: 0,
   paddingLength: 0,
   containerID: 1,
-  containerName: 'events',
-  content: ' ',
+  containerName: 'waterfall',
+  content: initialFrame,
+  textColor: 4,
   isEventCapture: 1,
 })
-
-const image = new ImageContainerProperty({
-  xPosition: (576 - FRAME_WIDTH) / 2,
-  yPosition: (288 - FRAME_HEIGHT) / 2,
-  width: FRAME_WIDTH,
-  height: FRAME_HEIGHT,
-  containerID: 2,
-  containerName: 'anchor-frame',
-})
-
-const statusLine = new TextContainerProperty({
-  xPosition: 0,
-  yPosition: 252,
-  width: 576,
-  height: 36,
-  borderWidth: 0,
-  borderColor: 5,
-  paddingLength: 2,
-  containerID: 3,
-  containerName: 'status',
-  content: 'World Anchor Lab · starting…',
-  isEventCapture: 0,
-})
-
 const page = new CreateStartUpPageContainer({
-  containerTotalNum: 3,
-  textObject: [eventLayer, statusLine],
-  imageObject: [image],
+  containerTotalNum: 1,
+  textObject: [waterfall],
 })
 
 const created = await bridge.createStartUpPageContainer(page)
@@ -98,76 +92,114 @@ if (created !== StartUpPageCreateResult.success) {
   throw new Error(`Glasses page creation failed (${created})`)
 }
 
-let renderTail: Promise<void> = Promise.resolve()
-let lastTransferMs = 0
-let pulseGeneration = 0
-
-async function setGlassesStatus(content: string) {
-  await bridge.textContainerUpgrade(new TextContainerUpgrade({
-    containerID: 3,
-    containerName: 'status',
-    content,
-  }))
-}
-
-async function pushFrame(bytes: Uint8Array) {
-  renderTail = renderTail.catch(() => undefined).then(async () => {
-    const started = performance.now()
-    const result = await bridge.updateImageRawData(new ImageRawDataUpdate({
-      containerID: 2,
-      containerName: 'anchor-frame',
-      imageData: bytes,
-    }))
-    lastTransferMs = performance.now() - started
-    if (result !== 'success') throw new Error(`Image transfer failed (${result})`)
-  })
-  await renderTail
-}
-
-async function showStaticPattern(pattern: PatternId) {
-  const bytes = renderPattern(pattern)
-  await pushFrame(bytes)
-  const label = PATTERNS.find(value => value.id === pattern)?.label ?? pattern
-  const detail = `${FRAME_WIDTH}×${FRAME_HEIGHT} gray4/LZ4 · ${lastTransferMs.toFixed(0)} ms transfer`
-  await setGlassesStatus(`${label} · tap next · double-tap exit`)
-  phoneStatus(label, detail, 'ready')
-  log(`${label}: ${bytes.byteLength} bytes, ${lastTransferMs.toFixed(0)} ms`)
-}
-
-async function runPulse(generation: number) {
-  let frame = 0
-  const started = performance.now()
-  while (generation === pulseGeneration && activePattern === 'pulse') {
-    const bytes = renderPattern('pulse', frame)
-    await pushFrame(bytes)
-    frame += 1
-    const elapsedSeconds = Math.max((performance.now() - started) / 1000, 0.001)
-    const completedFps = frame / elapsedSeconds
-    if (frame === 1 || frame % 5 === 0) {
-      await setGlassesStatus(`Pulse · ${completedFps.toFixed(1)} completed fps · tap next`)
-      phoneStatus('Transport pulse', `${completedFps.toFixed(1)} completed frames/s · ${lastTransferMs.toFixed(0)} ms last transfer`, 'ready')
-    }
-    await new Promise(resolve => window.setTimeout(resolve, 60))
-  }
-}
-
-async function selectPattern(pattern: PatternId) {
-  pulseGeneration += 1
-  activePattern = pattern
-  updateButtons()
-  if (pattern === 'pulse') {
-    phoneStatus('Transport pulse', 'Measuring completed image transfers…')
-    await runPulse(pulseGeneration)
-  } else {
-    await showStaticPattern(pattern)
-  }
-}
+let desiredFrame = initialFrame
+let lastSentFrame = initialFrame
+let pumpActive = false
+let cleanedUp = false
+let animationTimer = 0
 
 function reportError(error: unknown) {
   const message = error instanceof Error ? error.message : String(error)
   phoneStatus('Companion error', message, 'error')
   log(`ERROR: ${message}`)
-  setGlassesStatus(`Error · ${message}`).catch(() => undefined)
+}
+
+function queueFrame(frame: string) {
+  desiredFrame = frame
+  if (!pumpActive && !cleanedUp) void pumpFrames()
+}
+
+async function pumpFrames() {
+  pumpActive = true
+  try {
+    while (!cleanedUp && desiredFrame !== lastSentFrame) {
+      const target = desiredFrame
+      const patch = diffText(lastSentFrame, target)
+      if (!patch) break
+      const useDelta = patch.content.length < target.length * 0.65
+      const started = performance.now()
+      const ok = await bridge.textContainerUpgrade(new TextContainerUpgrade({
+        containerID: 1,
+        containerName: 'waterfall',
+        contentOffset: useDelta ? patch.offset : 0,
+        contentLength: useDelta ? patch.replacedLength : 0,
+        content: useDelta ? patch.content : target,
+      }))
+      lastTransferMs = performance.now() - started
+      if (!ok) throw new Error('Text update rejected by Even Hub')
+      lastSentFrame = target
+      completedInWindow += 1
+      const now = performance.now()
+      const windowSeconds = (now - updateWindowStartedAt) / 1000
+      if (windowSeconds >= 1) {
+        completedFps = completedInWindow / windowSeconds
+        completedInWindow = 0
+        updateWindowStartedAt = now
+        log(`${useDelta ? 'delta' : 'full'} ${useDelta ? patch.content.length : target.length} chars · ${lastTransferMs.toFixed(0)} ms`)
+      }
+    }
+  } catch (error) {
+    reportError(error)
+    // Avoid a hot retry loop if the Even app or glasses temporarily rejects
+    // updates. The desired frame remains conflated and is retried after backoff.
+    await new Promise(resolve => window.setTimeout(resolve, 250))
+  } finally {
+    pumpActive = false
+    if (!cleanedUp && desiredFrame !== lastSentFrame) queueFrame(desiredFrame)
+  }
+}
+
+function renderNow(now = performance.now()) {
+  const frame = renderWaterfall(elapsedForRender(now), settings, playing)
+  refreshPhone(frame)
+  queueFrame(frame)
+}
+
+function freezeBeat(now = performance.now()) {
+  accumulatedBeat = currentBeat(now)
+  playbackStartedAt = now
+}
+
+function togglePlayback() {
+  const now = performance.now()
+  freezeBeat(now)
+  playing = !playing
+  playbackStartedAt = now
+  renderNow(now)
+}
+
+function restart() {
+  accumulatedBeat = 0
+  playbackStartedAt = performance.now()
+  renderNow(playbackStartedAt)
+}
+
+function updateTempo(delta: number) {
+  const now = performance.now()
+  freezeBeat(now)
+  settings = { ...settings, tempoBpm: Math.max(40, Math.min(180, settings.tempoBpm + delta)) }
+  playbackStartedAt = now
+  renderNow(now)
+}
+
+function adjust(action: string) {
+  if (action === 'toggle') togglePlayback()
+  else if (action === 'restart') restart()
+  else if (action === 'tempo-down') updateTempo(-4)
+  else if (action === 'tempo-up') updateTempo(4)
+  else if (action === 'left') settings = { ...settings, centerColumn: Math.max(16, settings.centerColumn - 1) }
+  else if (action === 'right') settings = { ...settings, centerColumn: Math.min(31, settings.centerColumn + 1) }
+  else if (action === 'width-down') settings = { ...settings, laneSpacing: Math.max(5, settings.laneSpacing - 1) }
+  else if (action === 'width-up') settings = { ...settings, laneSpacing: Math.min(10, settings.laneSpacing + 1) }
+  else if (action === 'strike-up') settings = { ...settings, strikeRow: Math.max(5, settings.strikeRow - 1) }
+  else if (action === 'strike-down') settings = { ...settings, strikeRow: Math.min(8, settings.strikeRow + 1) }
+  else if (action === 'depth-down') settings = { ...settings, lookaheadBeats: Math.max(2, settings.lookaheadBeats - 1) }
+  else if (action === 'depth-up') settings = { ...settings, lookaheadBeats: Math.min(8, settings.lookaheadBeats + 1) }
+  renderNow()
+}
+
+for (const button of Array.from(document.querySelectorAll<HTMLButtonElement>('button[data-action]'))) {
+  button.addEventListener('click', () => adjust(button.dataset.action ?? ''))
 }
 
 function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeList | null {
@@ -175,35 +207,27 @@ function eventTypeOf(envelope?: { eventType?: OsEventTypeList }): OsEventTypeLis
   return envelope.eventType ?? OsEventTypeList.CLICK_EVENT
 }
 
-let cleanedUp = false
 const unsubscribe = bridge.onEvenHubEvent(event => {
   const sysType = eventTypeOf(event.sysEvent)
   const textType = eventTypeOf(event.textEvent)
-
   if (sysType === OsEventTypeList.DOUBLE_CLICK_EVENT || textType === OsEventTypeList.DOUBLE_CLICK_EVENT) {
     cleanup()
     bridge.shutDownPageContainer(1)
-    return
+  } else if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
+    togglePlayback()
+  } else if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) {
+    cleanup()
   }
-
-  if (sysType === OsEventTypeList.CLICK_EVENT || textType === OsEventTypeList.CLICK_EVENT) {
-    const index = PATTERNS.findIndex(value => value.id === activePattern)
-    selectPattern(PATTERNS[(index + 1) % PATTERNS.length].id).catch(reportError)
-    return
-  }
-
-  if (sysType === OsEventTypeList.SYSTEM_EXIT_EVENT || sysType === OsEventTypeList.ABNORMAL_EXIT_EVENT) cleanup()
 })
+
+animationTimer = window.setInterval(() => renderNow(), 33)
 
 function cleanup() {
   if (cleanedUp) return
   cleanedUp = true
-  pulseGeneration += 1
+  window.clearInterval(animationTimer)
   unsubscribe()
 }
 
 window.addEventListener('beforeunload', cleanup)
-
-controlsEnabled = true
-updateButtons()
-await selectPattern('anchor')
+log('Native text waterfall ready · tap glasses to pause/play')
